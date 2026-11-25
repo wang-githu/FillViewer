@@ -1,0 +1,316 @@
+{
+  "info": {
+    "_postman_id": "3f1c7a52-9a4e-4b6e-9f3d-wincc-rest-0001",
+    "name": "WinCC REST (V8.1) 实测用例",
+    "description": "WinCC V8.1 REST 服务的可直接运行用例集（读/批量读/元数据/写/批量写/归档/历史）。\n\n使用前：\n1) 导入本集合与配套环境 `WinCC_REST.postman_environment.json`\n2) 右上角选择该环境\n3) Settings → 关闭 SSL certificate verification（自签证书必须关）\n4) 按需修改变量 baseUrl / user / pass / tag1 …\n\n注意：body 里的中文必须是 UTF-8 原文，不要转成 \\uXXXX。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "basic",
+    "basic": {
+      "username": "{{user}}",
+      "password": "{{pass}}"
+    }
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "https://YOUR-WINCC-HOST:8092/WinCCRestService" },
+    { "key": "tag1", "value": "teat" },
+    { "key": "tag2", "value": "模型名称" },
+    { "key": "tagArc", "value": "Demo_YL1YW1_PJ1" },
+    { "key": "arcName", "value": "供水系统" },
+    { "key": "notExist", "value": "不存在的变量XYZ" }
+  ],
+  "item": [
+    {
+      "name": "00 服务信息（连通性自检）",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{baseUrl}}", "host": ["{{baseUrl}}"] },
+        "description": "返回 description / winccVersion / projectName / serverName。只要这个 200，说明网络、证书、账号三件事都通了。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "const j = pm.response.json();",
+              "pm.test('含 winccVersion', () => pm.expect(j.winccVersion).to.be.a('string'));",
+              "console.log('项目:', j.projectName, ' 主机:', j.serverName, ' 版本:', j.winccVersion);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "01 读单个变量（GET Value）",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/tagManagement/Value/{{tag1}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["tagManagement", "Value", "{{tag1}}"]
+        },
+        "description": "读 1 个实时值。中文变量名 Postman 会自动百分号编码，不用手动处理。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "const j = pm.response.json();",
+              "pm.test('有 value 字段', () => pm.expect(j).to.have.property('value'));",
+              "console.log('value =', j.value, ' quality =', j.qualitycode, ' ts =', j.timestamp);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 批量读（POST Values）",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json; charset=utf-8" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"variableNames\": [\"{{tag1}}\", \"{{tag2}}\", \"{{notExist}}\"]\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/tagManagement/Values",
+          "host": ["{{baseUrl}}"],
+          "path": ["tagManagement", "Values"]
+        },
+        "description": "批量读只能用 POST + body。注意：用 GET 把变量名放查询串会返回 400。不存在的变量在结果里单独返回 {\"error\":\"Not Found\"}，不影响其它项。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "const j = pm.response.json();",
+              "pm.test('返回数组且长度=3', () => { pm.expect(j).to.be.an('array'); pm.expect(j.length).to.eql(3); });",
+              "pm.test('不存在的变量单独报错', () => {",
+              "  const miss = j.find(x => x.error);",
+              "  pm.expect(miss, '应有一项 error').to.be.ok;",
+              "});",
+              "j.forEach(x => console.log(x.variableName, '=', x.value === undefined ? ('ERR:' + x.error) : x.value, 'q=' + x.qualitycode));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 变量元数据（canRead / canWrite）",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/tagManagement/Variable/{{tag1}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["tagManagement", "Variable", "{{tag1}}"]
+        },
+        "description": "看这个变量能不能读/写。canWrite=false 就别试写入了。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "const j = pm.response.json();",
+              "console.log('canRead =', j.canRead, ' canWrite =', j.canWrite, ' comment =', j.comment);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 变量列表（分页）",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/tagManagement/Variables?itemLimit=200&continuationPoint=1",
+          "host": ["{{baseUrl}}"],
+          "path": ["tagManagement", "Variables"],
+          "query": [
+            { "key": "itemLimit", "value": "200" },
+            { "key": "continuationPoint", "value": "1" }
+          ]
+        },
+        "description": "一页 200 个变量；返回里 continuationPoint / moreAvailable 决定下一页起点。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "const j = pm.response.json();",
+              "pm.test('含 variables 数组', () => pm.expect(j.variables).to.be.an('array'));",
+              "console.log('本页', j.variables.length, '个；下一页 continuationPoint =', j.continuationPoint, ' moreAvailable =', j.moreAvailable);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 写单个变量（PUT Value）",
+      "request": {
+        "method": "PUT",
+        "header": [{ "key": "Content-Type", "value": "application/json; charset=utf-8" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"value\": \"0\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/tagManagement/Value/{{tag1}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["tagManagement", "Value", "{{tag1}}"]
+        },
+        "description": "写值会立刻作用到 PLC！测试请用内部变量（如 teat），并把 value 设成原值。errorcode=0 即成功。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "const j = pm.response.json();",
+              "pm.test('errorcode = 0', () => pm.expect(j.errorcode).to.eql(0));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 批量写（PUT Values + 数组）",
+      "request": {
+        "method": "PUT",
+        "header": [{ "key": "Content-Type", "value": "application/json; charset=utf-8" }],
+        "body": {
+          "mode": "raw",
+          "raw": "[\n  { \"variableName\": \"{{tag1}}\", \"value\": \"0\" }\n]",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/tagManagement/Values",
+          "host": ["{{baseUrl}}"],
+          "path": ["tagManagement", "Values"]
+        },
+        "description": "批量写＝PUT + 数组。用 POST 会 500（这是最容易踩的坑）。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "const j = pm.response.json();",
+              "pm.test('数组且 errorcode=0', () => { pm.expect(j).to.be.an('array'); pm.expect(j[0].errorcode).to.eql(0); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 归档变量配置（tagLogging）",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/tagLogging/Variable/{{tagArc}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["tagLogging", "Variable", "{{tagArc}}"]
+        },
+        "description": "只有被归档的变量才有历史。返回里的 archiveName 就是下一步要用的归档名。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "const j = pm.response.json();",
+              "pm.test('含 archiveName', () => pm.expect(j.archiveName).to.be.a('string'));",
+              "console.log('归档名 =', j.archiveName, ' 采集周期 =', j.acquisitionCycle);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 历史值（POST tagLogging/Values）",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json; charset=utf-8" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"archives\": [\n    {\n      \"name\": \"{{arcName}}\",\n      \"variables\": [\n        { \"name\": \"{{tagArc}}\", \"range\": 3600, \"maxValues\": 600 }\n      ]\n    }\n  ]\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/tagLogging/Values",
+          "host": ["{{baseUrl}}"],
+          "path": ["tagLogging", "Values"]
+        },
+        "description": "range=最近多少秒；也可改用 timeFrom/timeTo。返回 values 数组按时间升序。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "const j = pm.response.json();",
+              "pm.test('是数组', () => pm.expect(j).to.be.an('array'));",
+              "const first = j[0] || {};",
+              "pm.test('含 values', () => pm.expect(first.values).to.be.an('array'));",
+              "console.log('点数 =', (first.values || []).length, ' errorcode =', first.errorcode);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 错误样例：读不存在的变量",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/tagManagement/Value/{{notExist}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["tagManagement", "Value", "{{notExist}}"]
+        },
+        "description": "用来确认「读不到」时服务端到底返回什么（通常是 404 或 200+error 字段），便于你在代码里正确处理。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('状态码是 404 或 200', () => pm.expect([200, 404]).to.include(pm.response.code));",
+              "console.log('status =', pm.response.code, ' body =', pm.response.text().slice(0, 200));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

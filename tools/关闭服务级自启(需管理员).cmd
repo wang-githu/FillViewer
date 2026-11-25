@@ -1,0 +1,3 @@
+@echo off
+schtasks /delete /tn "FillViewer·þÎñ" /f
+pause

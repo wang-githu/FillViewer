@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>变量数据 · FillViewer</title>
+<style>
+:root{--bg:#0b1220;--panel:#111c2e;--line:#1e2f46;--txt:#dbe7f5;--dim:#7d93ad;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444;--acc:#1f7ae0;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:13px/1.5 "Microsoft YaHei",system-ui,sans-serif}
+header{position:sticky;top:0;z-index:5;background:linear-gradient(180deg,#122036,#0d1826);border-bottom:1px solid var(--line);padding:8px 14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.5px}
+.pill{padding:2px 9px;border-radius:999px;font-size:12px;border:1px solid var(--line);background:#0e1a2a}
+.pill.rest{color:#7ee0a3;border-color:#1d5f3a}
+.pill.file{color:#f3c26b;border-color:#6b5423}
+.pill.none{color:#f28b8b;border-color:#6b2727}
+.stat{color:var(--dim)}
+.stat b{color:var(--txt);font-weight:600}
+label.chk{display:flex;align-items:center;gap:5px;color:var(--dim);cursor:pointer;user-select:none}
+input,select,button{font:inherit;color:var(--txt);background:#0e1a2a;border:1px solid var(--line);border-radius:6px;padding:4px 8px;outline:none}
+input:focus,select:focus{border-color:var(--acc)}
+button{cursor:pointer}
+button:hover{border-color:var(--acc)}
+button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+button.mini{padding:1px 7px;font-size:12px;border-radius:5px}
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 14px;border-bottom:1px solid var(--line);background:#0e1725}
+.chips{display:flex;gap:6px}
+.chip{padding:3px 10px;border-radius:999px;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:12px}
+.chip.on{background:#17324f;color:#cfe4ff;border-color:#2b5b8d}
+main{padding:0 0 40px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{padding:5px 8px;border-bottom:1px solid #16243a;text-align:left;white-space:nowrap}
+th{position:sticky;top:88px;background:#0f1a2b;color:var(--dim);font-weight:500;z-index:3}
+tbody tr:hover{background:#132133}
+td.name{font-family:Consolas,monospace;color:#cfe4ff}
+td.num{color:var(--dim);text-align:right;width:52px}
+td.val{font-family:Consolas,monospace;color:#9fe8bd;max-width:220px;overflow:hidden;text-overflow:ellipsis}
+td.err{color:#f0a0a0}
+.tag{font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid transparent}
+.tag.ok{color:#8ff0b0;background:#10321f;border-color:#1d5f3a}
+.tag.none{color:#9db;background:#131f2e;border-color:#2a3d55}
+.tag.bad{color:#ffb4b4;background:#33161a;border-color:#6b2727}
+.tag.warn{color:#ffd48a;background:#2f2510;border-color:#6b5423}
+.pager{display:flex;gap:8px;align-items:center;justify-content:center;padding:12px;color:var(--dim)}
+.wbox{display:flex;gap:4px}
+.wbox input{width:88px;padding:1px 6px;font-size:12px}
+#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:#132133;border:1px solid var(--line);padding:8px 16px;border-radius:8px;display:none;z-index:9}
+</style>
+</head>
+<body>
+<header>
+  <h1>变量数据</h1>
+  <span class="pill none" id="srcPill">数据源 —</span>
+  <span class="stat">更新 <b id="tsTxt">—</b></span>
+  <span class="stat">变量 <b id="cntAll">—</b> · 可写 <b id="cntW">—</b> · 本次读到 <b id="cntOk">0</b> · 失败 <b id="cntBad">0</b></span>
+  <label class="chk"><input type="checkbox" id="auto" checked> 自动刷新</label>
+  <button id="btnRefresh" class="primary" title="重新取值 + 重新检测当前页">刷新</button>
+  <span style="flex:1"></span>
+  <button id="btnBack">返回配置台</button>
+</header>
+
+<div class="toolbar">
+  <input id="q" placeholder="搜索 名称 / 注释（回车筛选）" style="width:280px">
+  <div class="chips" id="chips">
+    <div class="chip on" data-f="all">全部</div>
+    <div class="chip" data-f="val">有值</div>
+    <div class="chip" data-f="w">可写</div>
+    <div class="chip" data-f="bad">读取失败</div>
+    <div class="chip" data-f="no">未检测</div>
+  </div>
+  <select id="sys"><option value="">全部系统</option></select>
+  <button id="btnDetect" class="primary">检测本页</button>
+  <span class="stat" id="pageInfo"></span>
+</div>
+
+<main>
+<table>
+  <thead><tr>
+    <th class="num">#</th><th>名称</th><th>注释</th><th>类型</th><th>系统</th>
+    <th>可写</th><th>状态</th><th>质量</th><th>时间</th><th>值</th><th>写入</th>
+  </tr></thead>
+  <tbody id="tb"></tbody>
+</table>
+<div class="pager">
+  <button id="first">首页</button>
+  <button id="prev">上一页</button>
+  <span id="pg"></span>
+  <button id="next">下一页</button>
+  <button id="last">末页</button>
+  <select id="ps"><option>100</option><option selected>300</option><option>600</option></select>
+  <span>条/页</span>
+</div>
+</main>
+<div id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let VARS = [], LIVE = {}, LIVE_SRC = '', LIVE_TS = 0;
+let READ = {};                 // name -> {value,q,err,http,ts}
+let FILTER = 'all', KW = '', SYS = '', PAGE = 0, PS = 300;
+let timer = null;
+let _detecting = false;
+
+function toast(msg, ms) {
+  const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms || 2200);
+}
+
+function fmtTs(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString('zh-CN', { hour12: false });
+}
+
+async function loadVars() {
+  const r = await fetch('/api/vars?limit=5000', { cache: 'no-store' }).then(x => x.json());
+  VARS = (r.vars || []);
+  $('cntAll').textContent = VARS.length;
+  $('cntW').textContent = VARS.filter(v => v.w).length;
+  const sysSet = [...new Set(VARS.map(v => v.s).filter(Boolean))];
+  $('sys').innerHTML = '<option value="">全部系统</option>' + sysSet.map(s => `<option>${s}</option>`).join('');
+}
+
+async function loadLive() {
+  try {
+    const r = await fetch('/api/live', { cache: 'no-store' }).then(x => x.json());
+    LIVE = r.values || {}; LIVE_SRC = r.src || ''; LIVE_TS = r.ts || 0;
+    const p = $('srcPill');
+    if (LIVE_SRC === 'rest') { p.className = 'pill rest'; p.textContent = '数据源 WinCC REST'; }
+    else if (LIVE_SRC === 'file') { p.className = 'pill file'; p.textContent = '数据源 文件桥'; }
+    else { p.className = 'pill none'; p.textContent = '数据源 未连接'; }
+    $('tsTxt').textContent = fmtTs(LIVE_TS);
+    for (const [k, v] of Object.entries(LIVE)) {
+      if (!READ[k]) READ[k] = { value: v, q: '', ok: true, from: 'live' };
+    }
+  } catch (e) {
+    const p = $('srcPill'); p.className = 'pill none'; p.textContent = '数据源 未连接';
+  }
+}
+
+function rows() {
+  let a = VARS;
+  if (KW) { const k = KW.toLowerCase(); a = a.filter(v => (v.n || '').toLowerCase().includes(k) || (v.c || '').toLowerCase().includes(k)); }
+  if (SYS) a = a.filter(v => v.s === SYS);
+  if (FILTER === 'w') a = a.filter(v => v.w);
+  else if (FILTER === 'val') a = a.filter(v => READ[v.n]);
+  else if (FILTER === 'bad') a = a.filter(v => READ[v.n] && (READ[v.n].err || READ[v.n].ok === false));
+  else if (FILTER === 'no') a = a.filter(v => !READ[v.n]);
+  return a;
+}
+
+function st(v) {
+  const r = READ[v.n];
+  if (!r) return ['none', '未检测'];
+  if (r.err) return ['bad', '失败'];
+  if (r.ok === false) return ['warn', '无值'];
+  return ['ok', '已读到'];
+}
+
+function render() {
+  const a = rows();
+  const pages = Math.max(1, Math.ceil(a.length / PS));
+  if (PAGE >= pages) PAGE = pages - 1;
+  const slice = a.slice(PAGE * PS, PAGE * PS + PS);
+  const tb = $('tb');
+  tb.innerHTML = slice.map((v, i) => {
+    const [cls, txt] = st(v);
+    const r = READ[v.n] || {};
+    const val = (r.value === undefined || r.value === null || r.value === '') ? '' : String(r.value);
+    const q = (r.q === undefined || r.q === null) ? '' : String(r.q);
+    const err = r.err ? `<span class="err" title="${r.err}">${r.err}</span>` : '';
+    const wr = v.w
+      ? `<span class="wbox"><input data-wv="${encodeURIComponent(v.n)}" placeholder="值"><button class="mini" data-wb="${encodeURIComponent(v.n)}">写</button></span>`
+      : '<span class="stat">不可写</span>';
+    return `<tr>
+      <td class="num">${PAGE * PS + i + 1}</td>
+      <td class="name">${v.n}${err ? ' ' + err : ''}</td>
+      <td>${v.c || ''}</td>
+      <td>${v.t || ''}</td>
+      <td>${v.s || ''}</td>
+      <td>${v.w ? '<span class="tag ok">可写</span>' : '<span class="stat">—</span>'}</td>
+      <td><span class="tag ${cls}">${txt}</span></td>
+      <td>${q}</td>
+      <td class="stat">${r.at ? String(r.at).slice(11, 19) : ''}</td>
+      <td class="val" title="${val.replace(/"/g, '&quot;')}">${val}</td>
+      <td>${wr}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="10" style="color:#7d93ad;padding:20px">没有匹配的变量</td></tr>';
+
+  $('pg').textContent = `${PAGE + 1} / ${pages}`;
+  const atHead = PAGE <= 0, atTail = PAGE >= pages - 1;
+  [['first', atHead], ['prev', atHead], ['last', atTail], ['next', atTail]].forEach(([id, off]) => {
+    const b = $(id); if (!b) return;
+    b.disabled = off;
+    b.style.opacity = off ? .4 : 1;
+    b.style.cursor = off ? 'not-allowed' : 'pointer';
+  });
+  $('pageInfo').textContent = `匹配 ${a.length} 条` + (pages <= 1 ? '（当前筛选下只有 1 页）' : '');
+  $('cntOk').textContent = Object.values(READ).filter(r => r && !r.err && r.ok !== false).length;
+  $('cntBad').textContent = Object.values(READ).filter(r => r && r.err).length;
+
+  tb.querySelectorAll('[data-wb]').forEach(b => {
+    b.onclick = async () => {
+      const n = decodeURIComponent(b.dataset.wb);
+      const inp = tb.querySelector(`[data-wv="${encodeURIComponent(n)}"]`);
+      let v = (inp.value || '').trim();
+      if (!v) { toast('先填要写入的值'); inp.focus(); return; }
+      if (!/^(true|false)$/i.test(v) && !isNaN(Number(v))) v = Number(v);
+      b.disabled = true;
+      try {
+        const r = await fetch('/api/write', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ n, v })
+        }).then(x => x.json());
+        if (r.errorcode || r.err) toast(`写入失败：${r.err || ('errorcode ' + r.errorcode)}`);
+        else toast(`已写入 ${n} = ${v}`);
+        await detect([{ n: n }]);
+        render();
+      } catch (e) { toast('写入异常：' + e.message); }
+      b.disabled = false;
+    };
+  });
+}
+
+async function detect(list) {
+  if (_detecting) return;                       // 防止刷新/定时器叠加重入
+  _detecting = true;
+  try {
+    const names = (list || rows().slice(PAGE * PS, PAGE * PS + PS)).map(v => v.n).slice(0, 400);
+    if (!names.length) return;
+    const chunk = 50;
+    for (let i = 0; i < names.length; i += chunk) {
+      const part = names.slice(i, i + chunk);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const qs = part.map(n => 'n=' + encodeURIComponent(n)).join('&');
+        try {
+          const r = await fetch('/api/read?' + qs, { cache: 'no-store' }).then(x => x.json());
+          const items = r.items || [];
+          let retry = [];
+          for (const it of items) {
+            const bad = it.http !== 200 || it.err;
+            READ[it.n] = {
+              value: it.value, q: it.q, at: it.ts || '',
+              err: it.err || (it.http && it.http !== 200 ? ('http ' + it.http) : ''),
+              ok: !bad && it.value !== undefined
+            };
+            const transient = it.http === 0 || it.http >= 500
+              || (it.err && /badjson|timeout|conn/i.test(it.err));
+            if (transient) retry.push(it.n);           // 瞬时错误重试一次
+          }
+          if (!retry.length || attempt === 1) break;
+          part.length = 0; part.push(...retry);
+          await new Promise(r => setTimeout(r, 250));
+        } catch (e) {
+          if (attempt === 1) toast('检测失败：' + e.message);
+        }
+      }
+      $('cntOk').textContent = Object.values(READ).filter(r => r && !r.err && r.ok !== false).length;
+      $('cntBad').textContent = Object.values(READ).filter(r => r && r.err).length;
+    }
+  } finally {
+    _detecting = false;
+  }
+}
+
+function bindUI() {
+  $('q').onkeydown = (e) => { if (e.key === 'Enter') { KW = $('q').value.trim(); PAGE = 0; render(); } };
+  $('q').oninput = (e) => { KW = e.target.value.trim(); PAGE = 0; render(); };
+  $('sys').onchange = (e) => { SYS = e.target.value; PAGE = 0; render(); };
+  $('chips').onclick = (e) => {
+    const c = e.target.closest('.chip'); if (!c) return;
+    $('chips').querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === c));
+    FILTER = c.dataset.f; PAGE = 0; render();
+  };
+  const gotoPage = async (p) => {
+    PAGE = p; render();
+    await detect();                                  // 新页立刻检测，状态/值才不是空的
+    render();
+  };
+  $('prev').onclick = () => { if (PAGE > 0) gotoPage(PAGE - 1); };
+  $('next').onclick = () => gotoPage(PAGE + 1);
+  $('first').onclick = () => gotoPage(0);
+  $('last').onclick = () => {
+    const a = rows().length;
+    gotoPage(Math.max(0, Math.ceil(a / PS) - 1));
+  };
+  $('ps').onchange = (e) => { PS = Number(e.target.value); PAGE = 0; render(); };
+  $('btnDetect').onclick = async () => { await detect(); render(); toast('本页已检测'); };
+  $('btnBack').onclick = () => { location.href = '/app/studio.html'; };
+  $('btnRefresh').onclick = async () => {
+    const b = $('btnRefresh');
+    if (b.disabled) return;
+    b.disabled = true; const t0 = b.textContent; b.textContent = '刷新中…';
+    try {
+      await loadLive();
+      await detect();
+      render();
+      toast('已刷新：取到 ' + Object.keys(LIVE).length + ' 个实时值，本页已重新检测');
+    } catch (e) { toast('刷新失败：' + e.message); }
+    b.textContent = t0; b.disabled = false;
+  };
+  $('auto').onchange = () => { setupTimer(); };
+}
+
+function setupTimer() {
+  if (timer) { clearInterval(timer); timer = null; }
+  if (!$('auto').checked) return;
+  let tick = 0;
+  timer = setInterval(async () => {
+    await loadLive();
+    tick++;
+    if (tick % 5 === 0 && document.visibilityState === 'visible') { await detect(); }
+    render();
+  }, 2000);
+}
+
+(async function init() {
+  bindUI();
+  await Promise.all([loadVars(), loadLive()]);
+  render();
+  setupTimer();
+  await detect();
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+# 本地配置与会话数据
+config.json
+logs/
+data/clicks.json
+data/mapping.json
+data/labels.json
+data/behaviors.json
+data/archives.json
+data/_*
+
+# 项目历史快照（运行时生成）
+projects/*/history/
+
+# 备份与临时产物
+*.bak
+*.bak_*
+*.zip
+FillViewer.exe
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+node_modules/
+dist/
+
+# 开发期临时脚本（tools/ 下以下划线开头的都是）
+tools/_*
+_*

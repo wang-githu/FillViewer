@@ -1,0 +1,1533 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>3D 运行画面 · v2</title>
+<style>
+  html, body { height: 100%; margin: 0; overflow: hidden; }
+  body { font: 13px/1.45 "Microsoft YaHei", system-ui, sans-serif; background: #dce8f2; }
+  #hud { position: fixed; left: 10px; top: 10px; z-index: 20; display: none;
+         background: rgba(120,26,32,.92); color: #fff1f1; padding: 9px 13px; border-radius: 6px;
+         font-size: 12.5px; line-height: 1.6; max-width: 46vw;
+         border-left: 4px solid #ff6b6b; box-shadow: 0 4px 16px rgba(0,0,0,.28); }
+  #hud b { color: #ffd7d7; }
+  #help { position: fixed; right: 12px; bottom: 8px; z-index: 20; color: #4a6478; font-size: 12px; }
+
+  /* 展板 */
+  .pnl { position: absolute; transform: translate(-50%, -100%); background: rgba(14,32,47,.92);
+         color: #e7f3fb; border-radius: 8px; border-left: 3px solid #2aa5e6; padding: 7px 10px;
+         box-sizing: border-box; min-width: 0; max-width: 70vw;
+         box-shadow: 0 4px 14px rgba(8,24,38,.36); pointer-events: auto; user-select: none; }
+  .pnl.weed { word-break: break-word; overflow-wrap: anywhere; }
+  .pnl.weed .r { flex-wrap: wrap; gap: 4px; }
+  .pnl.fixed { border-left-color: #ffb454; }
+  .pnl h4 { margin: 0 0 5px; font-size: 12.5px; font-weight: 600; color: #9fd8f7; }
+  .pnl .r { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; line-height: 1.65; }
+  .pnl .r .k { color: #a9c7dc; }
+  .pnl .r .v { font-weight: 600; color: #eaf6ff; }
+  .pnl .r .v.bad { color: #ff6b6b; }
+  .pnl .r .v.off { color: #8898a6; }
+.pnl .v.rw { color:#7fe3ff; border-bottom:1px dashed rgba(127,227,255,.55); cursor:pointer }
+</style>
+</head>
+<body>
+<div id="hud"></div>
+<div id="dbg" style="position:fixed;right:12px;bottom:26px;z-index:20;color:#8fb3c9;font-size:11px;display:none"></div>
+<div id="help">左键拖动旋转 · 滚轮缩放 · 双击展板数值可写入（需白名单）</div>
+
+<script type="importmap">
+{ "imports": { "three": "../js/three.module.js", "three/addons/": "../js/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import { PipeRunner } from '../js/pipeflow.js?v=2b';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const Q = new URLSearchParams(location.search);
+const PID = Q.get('p') || localStorage.getItem('studio.pid') || '';
+const MODEL_OVERRIDE = Q.get('m') || '';  // ?m=xxx.glb 覆盖项目模型（运行选项用）
+
+let PROJECT = {}, BINDINGS = [], PANELS = [], PIPES = [], VALUES = {}, WRITABLE = {};
+
+// ?vals={"变量名":数值} —— 调试/演示用，临时覆盖实时值（不影响写入 WinCC）
+let _FORCE_VALS = null;
+try {
+  const _vq = new URLSearchParams(location.search).get('vals');
+  if (_vq) _FORCE_VALS = JSON.parse(_vq);
+} catch (e) { console.warn('vals 参数解析失败', e); }
+let root = null, needRender = true, spinPhase = 0, lastT = performance.now();
+const PFHEAD = new URLSearchParams(location.search).get('pfhead');
+
+/* ---------- 渲染器 ---------- */
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.1, 6000);
+const _HQ = !/[?&]hq=0/.test(location.search);   // 默认高清；?hq=0 回到省电模式（旧行为）
+const renderer = new THREE.WebGLRenderer({ antialias: _HQ });
+renderer.setPixelRatio(_HQ ? Math.min(devicePixelRatio || 1, 1.5) : 1);
+
+/* 软件渲染检测：远程桌面 / 无显卡驱动时浏览器会退回 SwiftShader，帧率只有个位数到十几帧。
+   这种情况下把像素比压到 1、帧上限降到 15，先保证「看得到在动」而不是糊成一片。 */
+let _swRender = false, _glName = '';
+try {
+  const _gl = renderer.getContext();
+  const _dbg = _gl.getExtension('WEBGL_debug_renderer_info');
+  _glName = _dbg ? String(_gl.getParameter(_dbg.UNMASKED_RENDERER_WEBGL) || '') : '';
+  _swRender = /swiftshader|basic render|software|llvmpipe|microsoft/i.test(_glName);
+} catch (e) { }
+if (_swRender) renderer.setPixelRatio(1);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.setSize(innerWidth, innerHeight);
+labelRenderer.domElement.style.position = 'fixed';
+labelRenderer.domElement.style.top = '0';
+labelRenderer.domElement.style.pointerEvents = 'none';
+document.body.appendChild(labelRenderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.addEventListener('change', () => { needRender = true; });
+
+/* ---------- 打光：环境反射 + 三点光 + ACES 色调映射 ----------
+   旧版 1.5/2.1/0.9 三盏灯叠起来 >4.5，又没有色调映射，亮面直接被推到纯白，
+   白漆设备只剩轮廓（"一片白"的根因）。现在：光强降下来、加 ACES 把高光压回去、
+   再用 RoomEnvironment 给一层环境反射，白漆才有灰阶和面与面的分界。
+   临时调亮度：URL 加 ?ex=1.2（曝光，默认 1.05）。 */
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = (() => { const v = parseFloat(Q.get('ex')); return (isFinite(v) && v > 0) ? v : 1.05; })();
+
+const _pmrem = new THREE.PMREMGenerator(renderer);
+_pmrem.compileEquirectangularShader();
+scene.environment = _pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+const hemi = new THREE.HemisphereLight(0xeaf4ff, 0x6b7a88, 0.32);      // 天光 + 地面反弹
+const key = new THREE.DirectionalLight(0xfff4e6, 1.45); key.position.set(40, 66, 46);   // 主光（右上前）
+const fill = new THREE.DirectionalLight(0xd6e6ff, 0.38); fill.position.set(-48, 26, -30); // 补光（左下后）
+const rim = new THREE.DirectionalLight(0xffffff, 0.30); rim.position.set(-6, 14, -76);   // 轮廓光（背后）
+scene.add(hemi, key, fill, rim);
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  labelRenderer.setSize(innerWidth, innerHeight);
+  needRender = true;
+});
+
+function _normName(s) { return String(s || '').replace(/[\s\[\]\.:\/\\]/g, ''); }
+
+/* ---------- 剥离 GLB 自带灯光 ----------
+   Blender 的 Sun 灯导出成 KHR_lights_punctual 后强度是"物理量级"（实测 1708 / 785 / 581），
+   three.js 的 GLTFLoader 照字面塞进 DirectionalLight.intensity —— 几千的光强压在材质上，
+   不论底色多深都直接顶到纯白，画面就只剩白轮廓（这是"全是白模"的真凶，不是材质问题）。
+   载入后统一剥掉，改用本页自己的一套光；确实想用模型自带灯光时 URL 加 ?gltflights=1。 */
+function stripGLBLights(rootObj) {
+  if (/[?&]gltflights=1/.test(location.search)) return 0;
+  const lights = [];
+  rootObj.traverse(o => { if (o.isLight) lights.push(o); });
+  lights.forEach(l => { if (l.parent) l.parent.remove(l); });
+  LAST_STRIPPED = lights.length;
+  if (lights.length) console.info('[打光] 已剥离模型自带灯光 ' + lights.length + ' 盏（导出时带进来的 Sun）');
+  return lights.length;
+}
+let LAST_STRIPPED = 0;
+
+/* ---------- 阴影：给"落地感"和面与面的分界 ----------
+   没有阴影时，几百个零件叠在一起会糊成一片；一张方向光阴影贴图就能把层次拉开。
+   代价是每个视角多一遍 shadow pass；机器吃力时用 ?shadow=0 关掉。 */
+function applyShadows(center, size) {
+  if (/[?&]shadow=0/.test(location.search)) return;
+  const r = Math.max(size.x, size.y, size.z) || 100;
+  key.castShadow = true;
+  key.shadow.mapSize.set(2048, 2048);
+  key.shadow.camera.left = -r * 0.85; key.shadow.camera.right = r * 0.85;
+  key.shadow.camera.top = r * 0.85; key.shadow.camera.bottom = -r * 0.85;
+  key.shadow.camera.near = Math.max(0.1, r * 0.05);
+  key.shadow.camera.far = r * 8;
+  key.shadow.bias = -0.0008;
+  key.shadow.normalBias = r * 0.004;
+  key.target.position.copy(center);
+  key.position.set(center.x + r * 0.9, center.y + r * 1.6, center.z + r * 1.1);
+  scene.add(key.target);
+  renderer.shadowMap.enabled = true;
+/* 场景与灯光都是静态的：阴影只在第一帧算一次，之后不再重算（原先每帧多渲一遍深度，集显上最贵的一项） */
+renderer.shadowMap.autoUpdate = /[?&]shadow=1/.test(location.search);   // 默认静态；?shadow=1 恢复每帧阴影
+renderer.shadowMap.needsUpdate = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  if (root) root.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  console.info('[打光] 阴影已开启（?shadow=0 可关）');
+}
+
+/* 诊断模式：runtime.html?p=项目id&diag=1 —— HUD 多一行运行态信息，
+   用来一眼确认浏览器里跑的是不是改好的新代码（"打光v2"字样是版本戳）。 */
+function diagLine() {
+  if (!/[?&]diag=1/.test(location.search)) return '';
+  let meshes = 0; const seen = new Set(); let w = 0, m = 0, d = 0;
+  if (root) root.traverse(o => {
+    if (!o.isMesh) return;
+    meshes++;
+    (Array.isArray(o.material) ? o.material : [o.material]).forEach(mt => {
+      if (!mt || seen.has(mt.uuid)) return;
+      seen.add(mt.uuid);
+      const c = mt.color; if (!c) return;
+      const mx = Math.max(c.r, c.g, c.b);
+      if (mx > 0.9) w++; else if (mx > 0.5) m++; else d++;
+    });
+  });
+  const tm = renderer.toneMapping === THREE.ACESFilmicToneMapping ? 'ACES' : '无色调映射';
+  const aa = renderer.getContext().getContextAttributes().antialias ? 'AA' : '无AA';
+  return `<span style="color:#7fd1ff">诊断 打光v2</span> · 网格 ${meshes} · 材质 ${seen.size}` +
+    `（白 ${w} / 中 ${m} / 深 ${d}） · 剥离自带灯 ${LAST_STRIPPED} · 曝光 ${renderer.toneMappingExposure} · ${tm}` +
+    ` · ${aa} · 像素比 ${renderer.getPixelRatio()} · 阴影 ${renderer.shadowMap.enabled ? '开' : '关'}`;
+}
+
+function findObj(n) {
+  if (!root) return null;
+  if (!root.userData._idx) {
+    const m = new Map();
+    root.traverse(o => {
+      if (!o.name) return;
+      if (!m.has(o.name)) m.set(o.name, o);
+      const k = _normName(o.name);
+      if (!m.has(k)) m.set(k, o);
+    });
+    root.userData._idx = m;
+  }
+  const idx = root.userData._idx;
+  return idx.get(n) || idx.get(_normName(n)) || null;
+}
+
+/* ---------- 载入项目 ---------- */
+function applyTiming(rec) {
+  rec = rec || {};
+  const pick = (uKey, cfgVal, dflt) => {
+    const u = Number(_Q.get(uKey));
+    if (isFinite(u) && u >= 0) return u;
+    const c = Number(cfgVal);
+    if (isFinite(c) && c >= 0) return c;
+    return dflt;
+  };
+  POLL_MS = Math.max(80, Math.min(5000, pick('poll', rec.poll, 300)));
+  LIVE_TTL = Math.max(0, Math.min(5000, pick('ttl', rec.liveTtl, 200)));
+  LIVE_FRESH = (_Q.get('fresh') === '1') || !!rec.fresh;
+}
+
+async function boot() {
+  try { await _boot(); } catch (e) { showErr('boot', '启动失败：' + (e && e.message ? e.message : e)); }
+}
+
+async function _boot() {
+  let pid = PID;
+  if (!pid) {
+    try {
+      const j = await fetch('/api/projects').then(r => r.json());
+      const list = j.projects || [];
+      if (!list.length) { showErr('proj', '还没有项目，请先打开配置台创建'); return; }
+      list.sort((a, b) => (b.updated || 0) - (a.updated || 0));
+      pid = list[0].id;
+    } catch (e) { }
+  }
+  if (!pid) { showErr('proj', '缺少项目参数：runtime.html?p=项目id'); return; }
+  let j = null;
+  try {
+    const rsp = await fetch('/api/project?id=' + encodeURIComponent(pid), { cache: 'no-store' });
+    if (!rsp.ok) { showErr('proj', '项目「' + pid + '」读取失败（HTTP ' + rsp.status + '）'); return; }
+    j = await rsp.json();
+  } catch (e) {
+    showErr('proj', '连不上配置服务：' + e);
+    return;
+  }
+  if (!j || j.error || !j.project) {
+    showErr('proj', '项目「' + pid + '」不存在或没有内容' + (j && j.error ? '：' + j.error : ''));
+    return;
+  }
+  PROJECT = j.project || {};
+  applyTiming(PROJECT);
+  BINDINGS = (j.bindings && j.bindings.items) || [];
+  PANELS = (j.panels && j.panels.items) || [];
+  PIPES = (j.pipes && j.pipes.items) || [];
+
+  const bg = PROJECT.background === 'dark' ? 0x0a1622 : 0xdce8f2;
+  scene.background = new THREE.Color(bg);
+
+  const model = MODEL_OVERRIDE || PROJECT.model;
+  if (!model) { showErr('proj', '项目还没有模型'); return; }
+  if (MODEL_OVERRIDE) console.info('[模型] 使用 URL/运行选项指定的模型：' + MODEL_OVERRIDE);
+
+  new GLTFLoader().load('/projects/' + pid + '/model/' + model, (g) => {
+    if (root) { try { scene.remove(root); } catch (e) { } }   // 换模型：先摘掉旧场景
+    BLINKS.clear(); PAINTED.clear(); PREV_BOUND.clear();      // 旧对象引用一律作废
+    root = g.scene;
+    root.userData._origDone = false;
+    stripGLBLights(root);
+    console.info('[FillViewer] 打光v2 · ACES 曝光 ' + renderer.toneMappingExposure + ' · 剥离自带灯 ' + LAST_STRIPPED + ' 盏');
+    scene.add(root);
+    const box0 = new THREE.Box3().setFromObject(root);
+    const c0 = box0.getCenter(new THREE.Vector3()), s0 = box0.getSize(new THREE.Vector3());
+    applyShadows(c0, s0);
+    const box = new THREE.Box3().setFromObject(root);
+    const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3());
+    controls.target.copy(c);
+    camera.position.set(c.x + s.x * 0.9, c.y + s.y * 1.05, c.z + s.z * 1.3);
+    buildPanels();
+    buildPipes();
+    hud();
+    needRender = true;
+    pushTags();
+    poll();
+    bindClickPick();
+    const _sel = new URLSearchParams(location.search).get('sel');
+    if (_sel) selectDevice(_sel);
+  }, undefined, () => { showErr('model', '模型加载失败：' + model); });
+}
+
+let _errs = new Map();
+
+// 左上角只在出错时出现：showErr(key, msg) / clearErr(key)
+function _renderErr() {
+  const el = document.getElementById('hud');
+  if (!el) return;
+  if (!_errs.size) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = 'block';
+  el.innerHTML = '<b>⚠ 运行异常</b><br>' + Array.from(_errs.values()).join('<br>');
+}
+function showErr(key, msg) { _errs.set(key, msg); _renderErr(); }
+function clearErr(key) { if (_errs.delete(key)) _renderErr(); }
+
+// 兼容旧调用：原来是往里塞状态文字，现在只当错误提示
+function hud(extra) {
+  const dg = diagLine();
+  if (extra && /错误|失败|未连接|缺少|没有/.test(extra)) showErr('hud', extra);
+  else clearErr('hud');
+  if (dg) showErr('diag', dg); else clearErr('diag');
+}
+
+/* ---------- 提示 ---------- */
+function flash(msg) {
+  let el = document.getElementById('flashToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'flashToast';
+    el.style.cssText = 'position:fixed;left:50%;bottom:46px;transform:translateX(-50%);' +
+      'background:#12304a;color:#e8f2ff;padding:8px 16px;border-radius:8px;font-size:13px;' +
+      'box-shadow:0 4px 16px rgba(0,0,0,.28);z-index:99;transition:opacity .25s';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.opacity = '0'; }, 2200);
+}
+
+/* ---------- 展板 ---------- */
+const panelObjs = [];
+const pipeStates = [];
+function buildPanels() {
+  panelObjs.forEach(p => { if (p.obj) p.obj.parent && p.obj.parent.remove(p.obj); });
+  panelObjs.length = 0;
+  PANELS.forEach(p => {
+    const el = document.createElement('div');
+    el.className = 'pnl' + (p.fixed ? ' fixed' : '');
+    if (Number(p.w) > 0) { el.style.width = Number(p.w) + 'px'; el.classList.add('weed'); }
+    if (Number(p.fs) > 0) el.style.fontSize = Number(p.fs) + 'px';
+    el.innerHTML = `<h4>${p.title || p.obj}</h4>` +
+      (p.items || []).map((it, i) =>
+        `<div class="r"><span class="k">${it.label || it.tag || ''}</span>` +
+        `<span class="v${it.rw ? ' rw' : ''}" data-tag="${it.tag || ''}" data-i="${i}"` +
+        ` data-rw="${it.rw ? 1 : 0}">${fmtVal(VALUES[it.tag], it)}</span></div>`).join('');
+    el.querySelectorAll('.v').forEach(v => {
+      v.ondblclick = () => tryWrite(v.dataset.tag, v.dataset.rw === '1');
+    });
+
+    if (Number(p.fs) > 0) {
+      const fs = Number(p.fs);
+      const h4 = el.querySelector('h4'); if (h4) h4.style.fontSize = Math.round(fs * 1.0) + 'px';
+      el.querySelectorAll('.r').forEach(r => r.style.fontSize = Math.round(fs * 1.0) + 'px');
+    }
+
+    const _vis0 = panelVisible(p);
+    if (!_vis0) el.style.display = 'none';
+    const co = new CSS2DObject(el);
+    co.visible = _vis0;
+    co.userData._vis = _vis0;
+    co.userData._pobj = p.obj;
+    const target = findObj(p.obj);
+    // 固定坐标必须合法且不是「全 0」；再做一次重复检测（多块展板同一个点会叠在一起）
+    let usePos = false;
+    if (p.fixed && Array.isArray(p.pos) && p.pos.length === 3) {
+      const q = p.pos.map(Number);
+      usePos = q.every(Number.isFinite) && !(Math.abs(q[0]) < 1e-6 && Math.abs(q[1]) < 1e-6 && Math.abs(q[2]) < 1e-6);
+      if (usePos) {
+        const dup = panelObjs.some(o => {
+          const r = o.rec || {};
+          if (!r.fixed || !Array.isArray(r.pos)) return false;
+          const t = r.pos.map(Number);
+          return t.every(Number.isFinite) &&
+            Math.abs(t[0] - q[0]) < 0.02 && Math.abs(t[1] - q[1]) < 0.02 && Math.abs(t[2] - q[2]) < 0.02;
+        });
+        if (dup) {
+          console.warn('[panel] 固定坐标与另一块展板重复，改为跟随对象：', p.obj, q);
+          usePos = false;
+          el.classList.remove('fixed');
+          el.title = '固定坐标与另一块展板重复，已改为跟随对象：' + (p.obj || '');
+        }
+        if (usePos) co.position.set(q[0], q[1], q[2]);
+      }
+    }
+    if (!usePos) {
+      if (target) {
+        const b = new THREE.Box3().setFromObject(target);
+        co.position.set((b.min.x + b.max.x) / 2, b.max.y + 0.6, (b.min.z + b.max.z) / 2);
+      } else {
+        console.warn('[panel] 找不到对象也没有合法坐标，跳过：', p.obj);
+        el.remove();
+        return;
+      }
+    }
+    scene.add(co);
+    panelObjs.push({ obj: co, rec: p });
+  });
+}
+
+/* ---------- 变量 ---------- */
+// 刷新节奏：可在配置台「设置 → 刷新与延迟」里改，也可用 URL 覆盖
+//   ?poll=200  轮询间隔(ms)     ?ttl=0  服务器缓存(ms)     ?fresh=1 强制直读
+const _Q = new URLSearchParams(location.search);
+let POLL_MS = 300;          // 默认 300ms
+let LIVE_TTL = 200;         // 服务器缓存默认 200ms
+let LIVE_FRESH = false;
+let _lastPollMs = 0, _lastPollTag = '';
+let ERR_REASON = {};   // 变量名 -> 失败原因（Forbidden / Not Found …）
+
+/* 唯一来源：所有需要轮询的变量名都从这里出来（新增字段务必加在这里） */
+function collectTags() {
+  const tags = new Set();
+  const addTag = (t) => {
+    t = (t == null ? '' : String(t)).trim();
+    if (!t) return;
+    if (/^-?\d+(\.\d+)?$/.test(t)) return;   // 纯数字＝固定值，不是变量名
+    tags.add(t);
+  };
+  BINDINGS.forEach(b => {
+    addTag(b.tag);
+    addTag(b.gate);
+    addTag(b.speedVar);
+    (b.rules || []).forEach(r => addTag(r && r.tag));   // 状态规则里的变量
+  });
+  PANELS.forEach(p => {
+    (p.items || []).forEach(it => addTag(it.tag));
+    addTag(p.vHide);                                  // 展板「显示控制」变量
+    addTag(p.vTag);
+  });
+  PIPES.forEach(p => {
+    exprTags(p.expr).forEach(t => addTag(t));
+    addTag(p.speedVar);
+  });
+  return tags;
+}
+
+let _tagAuditDone = false;
+function auditMissingTags() {
+  if (_tagAuditDone) return;
+  _tagAuditDone = true;
+  const miss = [];
+  collectTags().forEach(t => {
+    const v = VALUES[t];
+    if (v === undefined || v === null || v === '') miss.push(t);
+  });
+  if (!miss.length) return;
+  console.warn('[tags] 以下变量没有被取到值（可能是变量名不对、未轮询、或 WinCC 未给 REST 读授权）：', miss);
+  const reasons = miss.map(t => (ERR_REASON[t] ? t + '(' + ERR_REASON[t] + ')' : t));
+  let hint = '';
+  if (miss.some(t => /Forbidden/i.test(ERR_REASON[t] || ''))) {
+    hint = ' ｜ Forbidden = WinCC 未给该变量 REST 读授权';
+  } else if (miss.some(t => /Not Found/i.test(ERR_REASON[t] || ''))) {
+    hint = ' ｜ Not Found = 变量名不存在';
+  }
+  if (typeof showErr === 'function') {
+    showErr('tags', '有 ' + miss.length + ' 个变量没取到值：' + reasons.slice(0, 3).join('、') + hint);
+  }
+}
+
+function pushTags() {
+  const tags = collectTags();
+  if (!tags.size) return;
+  fetch('/api/tags', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tags: Array.from(tags) })
+  }).catch(() => {});
+}
+
+async function poll() {
+  const t0 = performance.now();
+  try {
+    const qs = '?t=' + Date.now() + '&ttl=' + Math.max(0, LIVE_TTL) +
+               (LIVE_FRESH ? '&fresh=1' : '');
+    const d = await fetch('/api/live' + qs, { cache: 'no-store' }).then(r => r.json());
+    _lastPollMs = Math.round(performance.now() - t0);
+    if (_Q.get('debug') === '1') {
+      const el = document.getElementById('dbg');
+      if (el) {
+        el.style.display = 'block';
+        el.textContent = '轮询 ' + POLL_MS + 'ms · 上次 ' + _lastPollMs + 'ms · 缓存 ' + LIVE_TTL + 'ms'
+          + ' · 变量 ' + Object.keys(VALUES || {}).length + ' · ' + (d && d.src);
+      }
+    }
+    if (d && d.values) {
+      VALUES = d.values;
+      ERR_REASON = (d && d.errors) || {};
+      try { auditMissingTags(); } catch (e) { }
+    if (_FORCE_VALS) Object.assign(VALUES, _FORCE_VALS);
+      renderPanels();
+      applyBindings();
+      applyPipes();
+    }
+    hud('');
+  } catch (e) { }
+  setTimeout(poll, Math.max(80, POLL_MS));
+}
+
+/* 数值格式化：dec=小数位数（留空=原样），neg 保留负号，千分位可选 */
+function fmtVal(raw, it) {
+  if (raw === undefined || raw === null || raw === '') return '—';
+  const n = Number(raw);
+  if (!isFinite(n)) return String(raw);          // 非数字（true/false/字符串）原样显示
+  let dec = (it && it.dec !== undefined && it.dec !== null && it.dec !== '') ? Number(it.dec) : null;
+  let out;
+  if (dec !== null && dec >= 0) {
+    out = n.toFixed(Math.min(6, Math.max(0, dec)));
+  } else {
+    out = String(Math.abs(n) >= 1e6 ? n.toExponential(3) : n);
+  }
+  if (it && it.thou && dec !== null) {
+    const parts = out.split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    out = parts.join('.');
+  }
+  if (it && it.unit) out += it.unit;
+  return out;
+}
+
+/* 展板显隐：vMode='' 不控制；'show' 满足时显示；'hide' 满足时隐藏 */
+function panelVisible(p) {
+  // 约定式：vHide 变量 = 0 → 显示；非 0（如 1） → 隐藏；读不到 → 先显示，别把信息藏起来
+  const hideTag = (p && p.vHide || '').trim();
+  if (hideTag) {
+    const g = valOf(hideTag);
+    if (!isFinite(g)) return true;
+    return g === 0;
+  }
+  const mode = p && p.vMode;
+  if (mode !== 'show' && mode !== 'hide') return true;
+  const tag = (p.vTag || '').trim();
+  if (!tag) return true;
+  const got = valOf(tag);
+  if (!isFinite(got)) return mode === 'hide';      // 读不到：当作"不满足"
+  const eq = (p.vEq === undefined || p.vEq === null || p.vEq === '') ? 1 : Number(p.vEq);
+  const hit = isFinite(eq) && got === eq;
+  return mode === 'show' ? hit : !hit;
+}
+
+function renderPanels() {
+  panelObjs.forEach(({ obj }) => {
+    const rec = PANELS.find(p => p.obj === obj.userData._pobj) || {};
+    const vis = panelVisible(rec);
+    if (obj.userData._vis !== vis) {
+      obj.userData._vis = vis;
+      obj.visible = vis;                       // CSS2DRenderer 按 visible 决定是否显示
+      obj.element.style.display = vis ? '' : 'none';
+      needRender = true;
+    }
+    obj.element.querySelectorAll('.v').forEach(v => {
+      const t = v.dataset.tag;
+      if (!t) return;
+      const raw = VALUES[t];
+      const it = (rec.items || [])[+v.dataset.i] || {};
+      if (raw === undefined || raw === null) { v.textContent = '—'; v.className = 'v off'; return; }
+      v.textContent = fmtVal(raw, it);
+      v.className = 'v' + (it.rw ? ' rw' : '');
+    });
+  });
+  needRender = true;
+}
+
+const _YAXIS = new THREE.Vector3(0, 1, 0);
+const _AXES = {
+  x: new THREE.Vector3(1, 0, 0),
+  y: new THREE.Vector3(0, 1, 0),
+  z: new THREE.Vector3(0, 0, 1)
+};
+function _qAxis(axis, ang) {
+  return new THREE.Quaternion().setFromAxisAngle(_AXES[axis] || _YAXIS, ang);
+}
+function _qY(ang) { return _qAxis('y', ang); }
+
+// 变量框里既可以写变量名，也可以写固定数字（如 1000 表示满转速）
+function valOf(t) {
+  if (t === null || t === undefined) return NaN;
+  const str = String(t).trim();
+  if (!str) return NaN;
+  if (!/^[A-Za-z_\u4e00-\u9fa5]/.test(str)) {
+    const lit = Number(str);
+    if (isFinite(lit)) return lit;
+  }
+  const raw = VALUES[str];
+  if (raw === null || raw === undefined) return NaN;
+  const lv = String(raw).trim().toLowerCase();      // WinCC 二进制变量返回 "true"/"false"
+  if (lv === 'true') return 1;
+  if (lv === 'false') return 0;
+  return Number(lv);
+}
+
+/* ---------- 绑定动作 ---------- */
+function base(o) {
+  if (!o.userData._b) {
+    const b = new THREE.Box3().setFromObject(o);
+    o.userData._b = { h: Math.max(0.001, b.max.y - b.min.y), py: o.position.y, ry: o.rotation.y, sy: o.scale.y,
+                      q: o.quaternion.clone() };
+  }
+  return o.userData._b;
+}
+
+// 两个 #rrggbb 之间按 HSL 插值（t=0 取 a，t=1 取 b）
+// 用 HSL 而不是 RGB：红(#f00)→绿(#0f0) 会经过黄，符合"开度 0~100% 红到绿"的直觉
+function _rgb2hsl(hex) {
+  const n = parseInt(String(hex).replace('#', ''), 16);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  const l = (mx + mn) / 2;
+  let h = 0, sa = 0;
+  if (mx !== mn) {
+    const d = mx - mn;
+    sa = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+    if (mx === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (mx === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+  }
+  return [h, sa, l];
+}
+function _hsl2hex(h, sa, l) {
+  h = ((h % 1) + 1) % 1;
+  function f(p, q, t) {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  }
+  let r, g, b;
+  if (sa === 0) { r = g = b = l; }
+  else {
+    const q = l < 0.5 ? l * (1 + sa) : l + sa - l * sa;
+    const p = 2 * l - q;
+    r = f(p, q, h + 1 / 3); g = f(p, q, h); b = f(p, q, h - 1 / 3);
+  }
+  const to = x => Math.round(x * 255).toString(16).padStart(2, '0');
+  return '#' + to(r) + to(g) + to(b);
+}
+function lerpHex(a, b, t) {
+  t = t < 0 ? 0 : (t > 1 ? 1 : t);
+  const [h1, s1, l1] = _rgb2hsl(a);
+  const [h2, s2, l2] = _rgb2hsl(b);
+  let dh = h2 - h1;
+  if (dh > 0.5) dh -= 1;
+  if (dh < -0.5) dh += 1;
+  return _hsl2hex(h1 + dh * t, s1 + (s2 - s1) * t, l1 + (l2 - l1) * t);
+}
+
+// 给"纵向缩放"的对象套一个 pivot 组：组原点在包围盒底面 → 缩放时从底部长起
+function lvlPrep(o) {
+  if (o.userData._lvl) return o.userData._lvl;
+  const box = new THREE.Box3().setFromObject(o);
+  if (!isFinite(box.min.y) || !isFinite(box.max.y)) {
+    const rec = { grp: null, h: 1 };
+    o.userData._lvl = rec;
+    return rec;
+  }
+  const h = Math.max(0.001, box.max.y - box.min.y);
+  const c = box.getCenter(new THREE.Vector3());
+  const parent = o.parent || scene;
+  const grp = new THREE.Group();
+  grp.name = '__lvl_' + (o.name || 'obj');
+  parent.add(grp);
+  const pLocal = parent.worldToLocal(new THREE.Vector3(c.x, box.min.y, c.z));
+  grp.position.copy(pLocal);
+  grp.updateMatrixWorld(true);
+  grp.attach(o);          // 保持世界变换，几何不动
+  const rec = { grp: grp, h: h };
+  o.userData._lvl = rec;
+  return rec;
+}
+
+function paint(o, hex) {
+  o.traverse(m => {
+    if (!m.isMesh) return;
+    if (!m.userData._m) {
+      m.userData._m = Array.isArray(m.material)
+        ? m.material.map(x => x.clone())
+        : m.material.clone();
+      m.material = m.userData._m;
+    }
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    mats.forEach(mm => { if (mm && mm.color) mm.color.set(hex); });
+  });
+  // 颜色被别的绑定改过了，渐变绑定下次必须重绘
+  o.userData._lastGrad = undefined;
+  PAINTED.add(o);
+}
+
+/* ---------- 状态规则用的原始颜色缓存 ---------- */
+function ensureOrig(o) {
+  if (o.userData._oc) return;
+  const arr = [];
+  o.traverse(m => {
+    if (!m.isMesh || !m.material) return;
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    const first = mats[0];
+    // 按 mesh 记原始色：paint() 之后 m.material 会变成克隆，靠这个才能还原
+    if (m.userData._c0 === undefined) {
+      m.userData._c0 = (first && first.color) ? first.color.getHex() : null;
+      m.userData._e0 = (first && first.emissive) ? first.emissive.getHex() : null;
+    }
+    mats.forEach(mm => arr.push({
+      m: mm,
+      c: mm.color ? mm.color.getHex() : null,
+      e: mm.emissive ? mm.emissive.getHex() : null,
+    }));
+  });
+  o.userData._oc = arr;
+}
+
+function restoreCol(o) {
+  o.traverse(m => {
+    if (!m.isMesh) return;
+    const mat = m.userData._m || m.material;      // 当前真正在用的材质
+    const mats = Array.isArray(mat) ? mat : [mat];
+    if (m.userData._c0 !== undefined) {
+      mats.forEach(mm => {
+        if (m.userData._c0 !== null && mm && mm.color) mm.color.setHex(m.userData._c0);
+        if (m.userData._e0 !== null && mm && mm.emissive) mm.emissive.setHex(m.userData._e0);
+      });
+    }
+  });
+  // 兼容旧缓存（按材质实例记的那份）
+  (o.userData._oc || []).forEach(it => {
+    if (it.c !== null && it.m && it.m.color) it.m.color.setHex(it.c);
+    if (it.e !== null && it.m && it.m.emissive) it.m.emissive.setHex(it.e);
+  });
+}
+
+/* 规则命中判断：mode='range' 走区间（闭区间，空端=无穷），否则走"等于某值"（缺省 1） */
+function ruleHit(raw, r) {
+  if (raw === undefined || raw === null || raw === '') return false;
+  const got = Number(raw);
+  if (!isFinite(got)) return false;
+  if (r && r.mode === 'range') {
+    const lo = (r.min === undefined || r.min === null || r.min === '') ? -Infinity : Number(r.min);
+    const hi = (r.max === undefined || r.max === null || r.max === '') ? Infinity : Number(r.max);
+    return got >= lo && got <= hi;
+  }
+  const eq = r ? r.eq : r;
+  const want = (eq === undefined || eq === null || eq === '') ? 1 : Number(eq);
+  return isFinite(want) && got === want;
+}
+
+const BLINKS = new Map();   // object -> {color, hz, on}
+const PAINTED = new Set();  // 本帧仍然被上色的对象（用于清理"绑定被删掉"的残留色）
+const PREV_BOUND = new Set();  // 上一帧仍被动作类绑定管理的对象（清理缩放/旋转残留）
+
+/* 旋转轴心自愈：原点离几何中心太远时，套一个以包围盒中心为原点的 Group
+   （换模型/换导出方式后，节点原点可能在很远的地方，直接转会变成"公转"） */
+function spinPrep(o) {
+  if (o.userData._spinG) return o.userData._spinG;
+  const bb = new THREE.Box3().setFromObject(o);
+  const c = bb.getCenter(new THREE.Vector3());
+  const sz = bb.getSize(new THREE.Vector3());
+  const wp = o.getWorldPosition(new THREE.Vector3());
+  const far = wp.distanceTo(c) > Math.max(sz.x, sz.y, sz.z) * 1.5;
+  if (!far) {
+    o.userData._spinG = { grp: o, wrapped: false };
+    return o.userData._spinG;
+  }
+  const parent = o.parent;
+  const grp = new THREE.Group();
+  const pLocal = parent.worldToLocal(c.clone());
+  grp.position.copy(pLocal);
+  parent.add(grp);
+  grp.updateMatrixWorld(true);
+  grp.attach(o);                 // 保持世界位置/朝向不变
+  o.userData._spinG = { grp: grp, wrapped: true };
+  console.warn('[spin] ' + (o.name || '?') + ' 原点离几何中心 ' +
+    wp.distanceTo(c).toFixed(2) + 'm，已自动改为绕自身中心旋转（建议在 Blender 里做一次原点归位）');
+  return o.userData._spinG;
+}
+
+function applyBindings() {
+  // 首次上色前先把「上色类」对象的原始颜色快照下来（paint 会换克隆材质）
+  if (root && !root.userData._origDone) {
+    root.userData._origDone = true;
+    for (const b of BINDINGS) {
+      if (b.type !== 'state' && b.type !== 'grad' && b.type !== 'color') continue;
+      const o0 = findObj(b.obj);
+      if (o0) ensureOrig(o0);
+    }
+  }
+  let dirty = false;
+  const _prevBlink = new Set(BLINKS.keys());
+  BLINKS.clear();
+  const _prevPainted = new Set(PAINTED);
+  PAINTED.clear();
+  const _prevBound = new Set(PREV_BOUND);
+  PREV_BOUND.clear();
+  for (const b of BINDINGS) {
+    const o = findObj(b.obj);
+    if (!o) continue;
+    if (b.type === 'state') {
+      ensureOrig(o);
+      let hit = null, hitRule = null;
+      for (const r2 of (b.rules || [])) {
+        if (ruleHit(valOf(r2.tag), r2)) { hit = r2.color || '#ff2d2d'; hitRule = r2; break; }
+      }
+      if (hit) {
+        if (hitRule && hitRule.blink) {
+          BLINKS.set(o, { color: hit, hz: Math.max(0.2, Number(b.blinkHz || 1.5)), on: null });
+        } else {
+          paint(o, hit);
+        }
+      } else {
+        restoreCol(o);
+      }
+      dirty = true;
+      continue;
+    }
+    const _v0 = valOf(b.tag);                 // 支持「固定数字」和 true/false
+    const _vOk = isFinite(_v0);
+    if (!_vOk && b.type !== 'spin') continue;  // spin 即使暂时取不到值也先登记配置
+    const v = _vOk ? _v0 : 0;
+    const bs = base(o);
+    PREV_BOUND.add(o);
+
+    if (b.type === 'grad') {
+      const lo = b.min ?? 0, hi = b.max ?? 100;
+      let t = (v - lo) / ((hi - lo) || 1);
+      t = t < 0 ? 0 : (t > 1 ? 1 : t);
+      const hex = lerpHex(b.c0 || '#ff2d2d', b.c1 || '#22c55e', t);
+      if (o.userData._lastGrad !== hex) {
+        o.userData._lastGrad = hex;
+        paint(o, hex);
+        dirty = true;
+      }
+    } else if (b.type === 'color') {
+      const lo = b.min ?? 0, hi = b.max ?? 1;
+      paint(o, (v >= lo && v <= hi) ? (b.color || '#ff2d2d') : 0x8b9aa8);
+      dirty = true;
+    } else if (b.type === 'level') {
+      const lo = b.min ?? 0, hi = b.max ?? 100;
+      let k = (v - lo) / ((hi - lo) || 1);
+      k = Math.max(0, Math.min(1, k));
+      const L = lvlPrep(o);
+      const kk = Math.max(0.0005, k);       // 0 时留一条极薄，避免完全消失
+      if (L.grp) {
+        if (Math.abs(L.grp.scale.y - kk) > 1e-4) { L.grp.scale.y = kk; dirty = true; }
+      } else {
+        // 兜底：没有 pivot 组时按旧办法缩自身
+        o.scale.y = bs.sy * kk;
+        o.position.y = bs.py - bs.h * (1 - kk) / 2;
+        dirty = true;
+      }
+    } else if (b.type === 'rot') {
+      const ang = v * (b.factor || 1) * (Number(b.dir || 1) < 0 ? -1 : 1);
+      if (bs.q) o.quaternion.copy(bs.q).premultiply(_qAxis(b.axis || 'y', ang));
+      else o.rotation.y = bs.ry + ang;
+      dirty = true;
+    } else if (b.type === 'spin') {
+      o.userData._spin = true;
+      o.userData._spinSpeed = Number(b.speed || 1.5);
+      o.userData._spinLo = b.min ?? 0;
+      o.userData._spinHi = b.max ?? 100;
+      o.userData._spinGate = b.gate || null;
+      o.userData._spinTag = b.tag || null;
+      const _sg = spinPrep(o);
+      /* 基线只在「首次」或「旋转目标变了」时取；否则每轮轮询都会把已转过的姿态当基线 → 越转越快 */
+      if (!o.userData._spinTarget || o.userData._spinTarget !== _sg.grp) {
+        o.userData._spinTarget = _sg.grp;
+        o.userData._spinQ = _sg.grp.quaternion.clone();
+        o.userData._spinAngle = 0;
+      }
+      if (o.userData._spinQ === undefined) o.userData._spinQ = _sg.grp.quaternion.clone();
+      if (o.userData._spinAngle === undefined) o.userData._spinAngle = 0;
+    // dir=1 表示"顺时针（俯视）"：绕 +Y 正角实际是逆时针，故取负号
+    o.userData._spinDir = Number(b.dir || 1) < 0 ? 1 : -1;
+    o.userData._spinAxis = b.axis || 'y';
+    }
+  }
+  _prevBlink.forEach(o => { if (!BLINKS.has(o)) { try { restoreCol(o); } catch (e) { } needRender = true; } });
+
+
+  // 上一帧还被动作类绑定管、本帧已移除 → 还原缩放/旋转/spin 标记
+  for (const o of _prevBound) {
+    if (PREV_BOUND.has(o)) continue;
+    const bs = o.userData._b;
+    try {
+      if (o.userData._lvl && o.userData._lvl.grp) o.userData._lvl.grp.scale.y = 1;
+      if (bs) {
+        o.scale.y = bs.sy;
+        o.position.y = bs.py;
+        if (bs.q) o.quaternion.copy(bs.q); else o.rotation.y = bs.ry;
+      }
+      delete o.userData._spin;
+      delete o.userData._spinGate;
+      delete o.userData._spinAngle;
+    } catch (e) { }
+    dirty = true;
+  }
+  // 上一帧染过色、本帧已经没有绑定管它的对象 → 还原原始颜色
+  for (const o of _prevPainted) {
+    if (PAINTED.has(o)) continue;
+    if (BLINKS.has(o)) continue;
+    restoreCol(o);
+    o.userData._lastGrad = undefined;
+    dirty = true;
+  }
+  if (dirty) needRender = true;
+}
+
+/* ---------- 管道：条件表达式 + 高亮 / 液体流动 ---------- */
+/* 表达式支持：数字、变量名（可含中文、_、[数字]）、> < >= <= == != && || ! ( ) + - * / */
+const RX_ID = /^[A-Za-z_\u4e00-\u9fa5][A-Za-z0-9_\u4e00-\u9fa5]*(?:\[[^\]]*\])?/;
+
+function lex(s) {
+  const t = []; let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === ' ' || c === '\t' || c === '\n') { i++; continue; }
+    const two = s.substr(i, 2);
+    if (two === '>=' || two === '<=' || two === '==' || two === '!=' || two === '&&' || two === '||') {
+      t.push({ k: 'op', v: two }); i += 2; continue;
+    }
+    if ('><()!+-*/'.includes(c)) { t.push({ k: 'op', v: c }); i++; continue; }
+    let m = /^\d+(?:\.\d+)?/.exec(s.slice(i));
+    if (m) { t.push({ k: 'num', v: parseFloat(m[0]) }); i += m[0].length; continue; }
+    m = RX_ID.exec(s.slice(i));
+    if (m) { t.push({ k: 'id', v: m[0] }); i += m[0].length; continue; }
+    i++;   // 无法识别的字符跳过
+  }
+  return t;
+}
+
+function exprTags(expr) {
+  if (!expr) return [];
+  return lex(expr).filter(x => x.k === 'id').map(x => x.v);
+}
+
+function evalExpr(expr) {
+  const t = lex(expr); let p = 0;
+  const peek = () => t[p], eat = () => t[p++];
+  const isOp = (v) => peek() && peek().k === 'op' && peek().v === v;
+
+  function primary() {
+    const x = eat();
+    if (!x) return NaN;
+    if (x.k === 'num') return x.v;
+    if (x.k === 'id') {
+      if (x.v === 'true') return 1;
+      if (x.v === 'false') return 0;
+      const r = VALUES[x.v];
+      if (r === undefined || r === null || r === '') return NaN;
+      const b = String(r).toLowerCase();
+      if (b === 'true') return 1;
+      if (b === 'false') return 0;
+      return Number(r);
+    }
+    if (x.v === '(') { const v = or(); if (isOp(')')) eat(); return v; }
+    if (x.v === '-') return -unary();
+    if (x.v === '+') return unary();
+    if (x.v === '!') return unary() ? 0 : 1;
+    return NaN;
+  }
+  function unary() { return peek() && isOp('-') ? (eat(), -unary()) : primary(); }
+  function mul() {
+    let v = unary();
+    while (peek() && peek().k === 'op' && '*/'.includes(peek().v)) {
+      const o = eat().v; const r = unary();
+      v = o === '*' ? v * r : v / r;
+    }
+    return v;
+  }
+  function add() {
+    let v = mul();
+    while (peek() && peek().k === 'op' && '+-'.includes(peek().v)) {
+      const o = eat().v; const r = mul();
+      v = o === '+' ? v + r : v - r;
+    }
+    return v;
+  }
+  function cmp() {
+    let v = add();
+    while (peek() && peek().k === 'op' && ['>', '<', '>=', '<=', '==', '!='].includes(peek().v)) {
+      const o = eat().v; const r = add();
+      v = o === '>' ? (v > r ? 1 : 0) : o === '<' ? (v < r ? 1 : 0)
+        : o === '>=' ? (v >= r ? 1 : 0) : o === '<=' ? (v <= r ? 1 : 0)
+          : o === '==' ? (v === r ? 1 : 0) : (v !== r ? 1 : 0);
+    }
+    return v;
+  }
+  function and() {
+    let v = cmp();
+    while (isOp('&&')) { eat(); const r = cmp(); v = (v ? 1 : 0) && (r ? 1 : 0); }
+    return v;
+  }
+  function or() {
+    let v = and();
+    while (isOp('||')) { eat(); const r = and(); v = (v ? 1 : 0) || (r ? 1 : 0); }
+    return v;
+  }
+  if (!t.length) return NaN;
+  try { return or(); } catch (e) { return NaN; }
+}
+
+/* ---------- 管道构建 ---------- */
+function objCenter(o) {
+  const b = new THREE.Box3().setFromObject(o);
+  return b.getCenter(new THREE.Vector3());
+}
+
+function orderChain(pts) {
+  // 最近邻串链
+  if (pts.length <= 2) return pts.slice();
+  let start = 0;
+  // 从「离其他点最远」的一端起步，避免从中间开花
+  let bestScore = -1;
+  pts.forEach((p, i) => {
+    let nn = Infinity;
+    pts.forEach((q, j) => { if (i !== j) nn = Math.min(nn, p.distanceTo(q)); });
+    if (nn > bestScore) { bestScore = nn; start = i; }
+  });
+  const left = pts.slice(), out = [left.splice(start, 1)[0]];
+  while (left.length) {
+    let bi = 0, bd = Infinity;
+    left.forEach((p, i) => { const d = p.distanceTo(out[out.length - 1]); if (d < bd) { bd = d; bi = i; } });
+    out.push(left.splice(bi, 1)[0]);
+  }
+  return out;
+}
+
+/* 把一堆段中心拆成若干条真实连通的链（跨链不连线） */
+function splitChains(pts) {
+  const n = pts.length;
+  if (n <= 1) return [pts.slice()];
+  // 每个点的最近邻距离，取中位数当尺度
+  const nn = pts.map((p, i) => {
+    let d = Infinity;
+    pts.forEach((q, j) => { if (i !== j) d = Math.min(d, p.distanceTo(q)); });
+    return d;
+  });
+  const sorted = nn.slice().sort((a, b) => a - b);
+  const med = sorted[Math.floor(sorted.length / 2)] || 0.5;
+  const link = Math.max(0.6, med * 2.2);
+
+  const par = pts.map((_, i) => i);
+  const find = (a) => { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; };
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (pts[i].distanceTo(pts[j]) < link) {
+        const a = find(i), b = find(j);
+        if (a !== b) par[a] = b;
+      }
+    }
+  }
+  const groups = new Map();
+  pts.forEach((p, i) => {
+    const r = find(i);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(p);
+  });
+  return Array.from(groups.values()).filter(g => g.length >= 1).map(orderChain);
+}
+
+let RUNNER = null;
+function buildPipes() {
+  pipeStates.length = 0;
+  if (RUNNER) { try { RUNNER.dispose(); } catch (e) { } }
+  try {
+    RUNNER = new PipeRunner(scene, root);
+    RUNNER.build(PIPES);
+    if (/[?&]pfdebug=1/.test(location.search)) pfDebug();
+    if (/[?&]pftest=red/.test(location.search)) pfTestRed();
+    if (/[?&]pftest=on/.test(location.search)) pfTestOn();
+  } catch (e) {
+    console.error('PipeRunner.build 失败', e);
+    RUNNER = null;
+  }
+  needRender = true;
+}
+
+/* 调试：忽略变量条件，强制点亮一条链并用固定相位（用于截图对比） */
+function pfTestOn() {
+  RUNNER.states.forEach(st => {
+    RUNNER._setOn(st, true);
+    st.chains.forEach((ch, ci) => { ch.head = (0.25 + 0.2 * ci) * (ch.span || ch.len); });
+    st.items.forEach(it => it.u.forEach(u => {
+      if (!u) return;
+      const ch = st.chains[it.chain];
+      u.uOn.value = 1;
+      u.uHead.value = ch.head;
+      u.uLen.value = ch.span || ch.len;
+      u.uMin.value = ch.uMin || 0;
+      u.uCount.value = 1;
+      u.uCore.value = 2;
+      u.uTail.value = 3;
+    }));
+  });
+  needRender = true;
+}
+
+/* 调试：把整条链强制染红，验证自定义着色器是否真的生效 */
+function pfTestRed() {
+  RUNNER.states.forEach(st => st.items.forEach(it => it.u.forEach(u => {
+    if (!u) return;
+    u.uOn.value = 1;
+    u.uCol.value.setHex(0xff0000);
+    u.uCore.value = 100000;
+    u.uTail.value = 1;
+  })));
+  needRender = true;
+}
+
+/* 调试：每根管子的 aFlowU 覆盖范围 / 世界尺寸 / 链条长度 */
+function pfDebug() {
+  setTimeout(() => {
+    RUNNER.states.forEach((st, si) => {
+      const it = st.items[0];
+      const u = it && it.u && it.u[0];
+      console.log(`T on=${st.on} sp=${st.sp.toFixed(2)} heads=${st.chains.map(c => (c.head || 0).toFixed(2) + '/' + (c.span || c.len).toFixed(1) + '@' + (c.uMin || 0).toFixed(1)).join(' ')}` +
+        (u ? ` u0: on=${u.uOn.value} head=${u.uHead.value.toFixed(2)} len=${u.uLen.value.toFixed(2)} min=${u.uMin.value.toFixed(2)} cnt=${u.uCount.value}` : ''));
+    });
+  }, 4000);
+  const box = new THREE.Box3();
+  const sz = new THREE.Vector3();
+  RUNNER.states.forEach((st, si) => {
+    console.log(`--- 管线 #${si} ${st.rec.name}  链数=${st.chains.length} 链长=${st.chains.map(c => c.len.toFixed(1)).join(',')}`);
+    st.items.forEach(it => {
+      const g = it.m.geometry;
+      const a = g && g.attributes && g.attributes.aFlowU;
+      if (!a) return;
+      let mn = Infinity, mx = -Infinity;
+      for (let i = 0; i < a.count; i++) { const v = a.getX(i); if (v < mn) mn = v; if (v > mx) mx = v; }
+      box.setFromObject(it.m); box.getSize(sz);
+      console.log('  ' + it.m.name +
+        ' | u=' + mn.toFixed(2) + '..' + mx.toFixed(2) + ' (跨度 ' + (mx - mn).toFixed(2) + ')' +
+        ' | 世界尺寸 ' + sz.x.toFixed(2) + '×' + sz.y.toFixed(2) + '×' + sz.z.toFixed(2) +
+        ' | 链长 ' + st.chains[it.chain].len.toFixed(1));
+    });
+  });
+}
+
+function buildPipesLegacy() {
+  pipeStates.length = 0;
+  if (!root) return;
+  PIPES.forEach(p => {
+    const objs = (p.objs || []).map(findObj).filter(Boolean);
+    if (!objs.length) return;
+    const st = { rec: p, objs, on: null, chains: [], phase: 0, totalLen: 0 };
+
+    // 原始颜色
+    objs.forEach(o => {
+      if (!o.userData._pc) {
+        o.userData._pc = [];
+        o.traverse(m => {
+          if (m.isMesh && m.material) {
+            o.userData._pc.push({ m, c: m.material.color ? m.material.color.getHex() : null, e: m.material.emissive ? m.material.emissive.getHex() : null });
+          }
+        });
+      }
+    });
+
+    if ((p.mode || 'flow') !== 'hl') {
+      const pts = objs.map(objCenter);
+      const chains = splitChains(pts);
+      const r = Math.max(0.05, p.r || 0.28);
+      const gap = Math.max(1, p.gap || 4);
+      const geo = new THREE.SphereGeometry(r, 10, 8);
+      chains.forEach((cp, ci) => {
+        if (cp.length < 2) return;
+        const curve = new THREE.CatmullRomCurve3(cp, false, 'centripetal', 0.2);
+        const len = curve.getLength();
+        const n = Math.max(2, Math.min(80, Math.round(len / gap)));
+        const beads = [];
+        for (let i = 0; i < n; i++) {
+          const mat = new THREE.MeshBasicMaterial({
+            color: p.color || '#19ffd8', transparent: true, opacity: 0.95,
+            depthTest: false, depthWrite: false
+          });
+          const b = new THREE.Mesh(geo, mat);
+          b.renderOrder = 999; b.visible = false;
+          scene.add(b);
+          beads.push({ m: b, off: i / n });
+        }
+        st.chains.push({ curve, len, beads, phase: 0.13 * ci });
+        st.totalLen += len;
+      });
+    }
+    pipeStates.push(st);
+  });
+  needRender = true;
+}
+
+function setPipeOn(st, on) {
+  if (st.on === on) return;
+  st.on = on;
+  const hex = st.rec.color || '#19ffd8';
+  const doPaint = (st.rec.mode === 'hl' || st.rec.mode === 'both');
+  if (doPaint) st.objs.forEach(o => {
+    (o.userData._pc || []).forEach(it => {
+      if (!it.m.material) return;
+      if (!it.m.userData._pm) { it.m.userData._pm = it.m.material.clone(); it.m.material = it.m.userData._pm; }
+      if (on) {
+        if (it.c !== null) it.m.material.color.set(hex);
+        if (it.e !== null) it.m.material.emissive && it.m.material.emissive.set(hex);
+        if ('emissiveIntensity' in it.m.material) it.m.material.emissiveIntensity = 0.55;
+      } else {
+        if (it.c !== null) it.m.material.color.setHex(it.c);
+        if (it.e !== null && it.m.material.emissive) it.m.material.emissive.setHex(it.e);
+        if ('emissiveIntensity' in it.m.material) it.m.material.emissiveIntensity = it.e ? 1 : 0;
+      }
+    });
+  });
+  st.chains.forEach(ch => ch.beads.forEach(b => { b.m.visible = on; }));
+}
+
+function applyPipes() {
+  if (RUNNER) { if (RUNNER.apply(VALUES)) needRender = true; return; }
+  if (!pipeStates.length) return;
+  pipeStates.forEach(st => {
+    const expr = (st.rec.expr || '').trim();
+    let on = true;
+    if (expr) {
+      const v = evalExpr(expr);
+      on = isFinite(v) ? !!v : false;
+    }
+    setPipeOn(st, on);
+  });
+  needRender = true;
+}
+
+function numOf(v) {
+  if (v === undefined || v === null || v === '') return NaN;
+  const s = String(v).toLowerCase().trim();
+  if (s === 'true') return 1;
+  if (s === 'false') return 0;
+  return Number(s);
+}
+
+/* 按变量调速 + 方向（rec.speedVar / rec.speedFull / rec.reverse: ''|'on'|'sign'） */
+function pipeMotion(rec) {
+  let sp = Number(rec.speed || 8);
+  let dir = 1;
+  const rv = rec.reverse;
+  if (rv === 'on' || rv === true) dir = -1;
+  const sv = (rec.speedVar || '').trim();
+  if (sv) {
+    const raw = numOf(VALUES ? VALUES[sv] : undefined);
+    if (isFinite(raw)) {
+      const full = Number(rec.speedFull || 100) || 100;
+      let k = Math.abs(raw) / full;
+      if (!isFinite(k) || k < 0) k = 0;
+      if (k > 3) k = 3;
+      if (Math.abs(raw) < 1e-9) k = 0;
+      sp = sp * k;
+      if (rv === 'sign') dir = raw < 0 ? -1 : 1;
+    }
+  }
+  return { sp: sp, dir: dir };
+}
+
+function tickPipes(dt) {
+  if (RUNNER) {
+    const r = RUNNER.tick(dt);
+    if (PFHEAD !== null) {                       // 调试：把相位钉死，用来对比两帧
+      const f = Number(PFHEAD);
+      RUNNER.states.forEach(st => st.chains.forEach(ch => { ch.head = f * (ch.span || ch.len); }));
+      RUNNER.tick(0);
+    }
+    if (r) needRender = true;      // 只有管线真的在动才重绘（原先这里还多一句无条件置 true，导致每帧全场景重绘）
+    return;
+  }
+  let any = false;
+  pipeStates.forEach(st => {
+    if (!st.on || !st.chains.length) return;
+    const mo = pipeMotion(st.rec);
+    if (!(mo.sp > 0)) return;          // 速度 0：光点停住
+    any = true;
+    const sp = mo.sp, rev = mo.dir;
+    st.chains.forEach(ch => {
+      ch.phase = (ch.phase + rev * dt * sp / Math.max(0.001, ch.len) + 1) % 1;
+      ch.beads.forEach(b => {
+        const u = (b.off + ch.phase) % 1;
+        b.m.position.copy(ch.curve.getPointAt(u));
+      });
+    });
+  });
+  if (any) needRender = true;
+}
+
+/* 调试：读取旋转绑定的累计角度（验证角速度是否恒定） */
+window.__spinState = () => {
+  const out = [];
+  if (!root) return out;
+  root.traverse(o => {
+    if (o.userData && o.userData._spin) {
+      out.push({ name: o.name, angle: Number(o.userData._spinAngle || 0),
+                 speed: Number(o.userData._spinSpeed || 0),
+                 axis: o.userData._spinAxis || 'y' });
+    }
+  });
+  return out;
+};
+
+/* ---------- 主循环 ---------- */
+const _fpsQ = Number((/[?&]fps=(\d+)/.exec(location.search) || [])[1]);
+let _fcap = (_fpsQ > 0) ? Math.min(60, Math.max(10, _fpsQ)) : (_swRender ? 15 : (_HQ ? 30 : 24)), _fsum = 0, _fn = 0, _fdeg = false, _painted = false;
+/* ---------- ?perf=1 性能面板（现场报数字用） ---------- */
+const PERF_ON = /[?&]perf=1/.test(location.search);
+let _pfN = 0, _pfT0 = performance.now(), _pfEl = null;
+function perfTick() {
+  if (!PERF_ON) return;
+  _pfN++;
+  const t = performance.now();
+  if (t - _pfT0 < 1000) return;
+  const fps = Math.round(_pfN * 1000 / (t - _pfT0));
+  const info = renderer.info.render;
+  let chains = 0;
+  try { if (RUNNER) RUNNER.states.forEach(st => chains += st.chains.length); } catch (e) { }
+  if (!_pfEl) {
+    _pfEl = document.createElement('div');
+    _pfEl.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:9999;background:rgba(0,0,0,.75);' +
+      'color:#7fe3ff;font:12px/1.6 Consolas,monospace;padding:6px 10px;border-radius:6px;white-space:pre;pointer-events:none';
+    document.body.appendChild(_pfEl);
+  }
+  _pfEl.textContent = 'FPS ' + fps + '   像素比 ' + renderer.getPixelRatio() +
+    '\n三角形 ' + info.triangles + '   drawCalls ' + info.calls +
+    '\n管线链 ' + chains + '   帧上限 ' + _fcap + (_swRender ? '   软件渲染' : '');
+  _pfN = 0; _pfT0 = t;
+}
+
+function tick(now) {
+  requestAnimationFrame(tick);
+  const raw = (now - lastT) / 1000;
+  if (_painted && raw < 1 / _fcap) return;     // 帧率上限（首帧不受限）
+  lastT = now;
+  const dt = Math.min(0.1, raw);
+  controls.update();
+  tickPipes(dt);
+
+  // 闪烁（命中报警规则时，原色 ↔ 告警色 交替）
+  BLINKS.forEach((cfg, o) => {
+    const on = (Math.floor(now / 1000 * cfg.hz * 2) % 2) === 0;
+    if (on === cfg.on) return;
+    cfg.on = on;
+    if (on) paint(o, cfg.color); else restoreCol(o);
+    needRender = true;
+  });
+
+  // 旋转动画（按状态启停 + 数值调速）
+  if (root) {
+    root.traverse(o => {
+      if (!o.userData._spin) return;
+      let run = true;
+      if (o.userData._spinGate) {
+        const g = valOf(o.userData._spinGate);
+        run = isFinite(g) && g !== 0;
+      }
+      if (!run) return;
+      const lo = o.userData._spinLo, hi = o.userData._spinHi;
+      // 调速：变量值（或固定数字）在 [min,max] 之间线性映射到 0~1 倍「最大转速」
+      let k = 1;
+      const tag = o.userData._spinTag;
+      if (tag !== null && tag !== undefined && String(tag).trim() !== '') {
+        const v = valOf(tag);
+        if (isFinite(v)) {
+          const d = (hi - lo) || 1;
+          k = (v - lo) / d;
+          k = k < 0 ? 0 : (k > 1 ? 1 : k);
+        } else {
+          k = 0;   // 变量读不到（名字写错/断线）：不转，便于发现配置问题
+          if (!o.userData._spinWarned) {
+            o.userData._spinWarned = true;
+            console.warn('[FillViewer] 旋转动画取不到变量值：' + tag + '（该对象暂时不转）');
+          }
+        }
+      }
+      if (k > 0) {
+        const tg = o.userData._spinTarget || o;          // 轴心（原点是远点时是套上的 Group）
+        o.userData._spinAngle = (o.userData._spinAngle || 0)
+          + o.userData._spinSpeed * (o.userData._spinDir || 1) * k * dt;
+        const q0 = o.userData._spinQ || tg.quaternion.clone();
+        tg.quaternion.copy(q0).premultiply(_qAxis(o.userData._spinAxis || 'y', o.userData._spinAngle));
+        needRender = true;
+      }
+    });
+  }
+
+  if (needRender) {
+    renderer.render(scene, camera);
+    labelRenderer.render(scene, camera);
+    perfTick();
+    needRender = false; _painted = true;
+    _fn++; _fsum += dt;
+    if (_fn >= 40) {
+      if (!_fdeg && _fsum / _fn > 0.09) {      // 平均 <11fps 才降档，且不再降到 0.65（那样整屏发糊）
+        _fdeg = true; renderer.setPixelRatio(_HQ ? 1 : 0.75); needRender = true;
+      }
+      _fn = 0; _fsum = 0;
+    }
+  }
+}
+
+/* ---------- 单击模型：回写设备名 + 动作位 ----------
+   用途：现场 WinCC 里用 VBS 监视「动作变量」上升沿，读「名称变量」打开对应设备的弹窗。
+   变量名可以在配置台 →「设置」→「单击回写」里改，存在 project.json 的 click 字段。 */
+const RAY = new THREE.Raycaster();
+const NDC = new THREE.Vector2();
+let _dnX = 0, _dnY = 0, _dnT = 0, _clickBusy = false;
+
+function clickCfg() {
+  const c = (PROJECT && PROJECT.click) || {};
+  return {
+    enabled: c.enabled !== false && c.nameVar !== '',
+    nameVar: c.nameVar || '模型名称',
+    actionVar: c.actionVar || '模型单击动作',
+    edge: c.edge !== false,          // true = 先写 0 再写 1，保证产生上升沿
+    level: c.level === true,
+  };
+}
+
+/* 取"设备级"名字：从命中的网格往上爬到 root 的直接子节点 */
+function deviceNameOf(obj) {
+  let o = obj;
+  while (o && o.parent && o.parent !== root) o = o.parent;
+  return (o && o.name) || (obj && obj.name) || '';
+}
+
+async function writeOne(tag, val) {
+  const r = await fetch('/api/write', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ n: tag, v: String(val) }),
+  });
+  return await r.json();
+}
+
+async function pushClick(name) {
+  const c = clickCfg();
+  if (!c.enabled || !name) return;
+  if (_clickBusy) return;
+  _clickBusy = true;
+  try {
+    const r1 = await writeOne(c.nameVar, name);
+    if (c.edge) {
+      await writeOne(c.actionVar, 0);
+      await new Promise(r => setTimeout(r, 60));
+    }
+    const r2 = await writeOne(c.actionVar, 1);
+    const bad = (r1 && r1.errorcode) || (r2 && r2.errorcode);
+    if (bad) flash('回写失败：' + c.nameVar + ' / ' + c.actionVar + '（errorcode ' + bad + '）');
+  } catch (e) {
+    flash('回写异常：' + e);
+  } finally {
+    setTimeout(() => { _clickBusy = false; }, 200);
+  }
+}
+
+/* ---------- 选中态：设备半透明 + 发光描边感（不用文字提示） ---------- */
+const SEL = { name: '', saved: [] };
+
+function clearSelect() {
+  SEL.saved.forEach(it => { it.mesh.material = it.mat; });
+  SEL.saved = [];
+  SEL.name = '';
+  needRender = true;
+  try { renderer.render(scene, camera); } catch (e) { }
+}
+
+function selectDevice(name) {
+  clearSelect();
+  const o = findObj(name);
+  if (!o) return;
+  const seen = new Set();
+  o.traverse(ch => {
+    if (!ch.isMesh || !ch.material) return;
+    const mats = Array.isArray(ch.material) ? ch.material : [ch.material];
+    const clones = mats.map(m => {
+      const c = m.clone();
+      c.transparent = true;
+      c.opacity = 0.55;
+      if (c.emissive) { c.emissive.set(0x2fa8ff); c.emissiveIntensity = 0.75; }
+      c.depthWrite = false;
+      return c;
+    });
+    SEL.saved.push({ mesh: ch, mat: ch.material });
+    ch.material = Array.isArray(ch.material) ? clones : clones[0];
+    seen.add(ch.uuid);
+  });
+  SEL.name = name;
+  needRender = true;
+  try { renderer.render(scene, camera); } catch (e) { }
+}
+
+function bindClickPick() {
+  const el = renderer.domElement;
+  el.addEventListener('pointerdown', (ev) => {
+    _dnX = ev.clientX; _dnY = ev.clientY; _dnT = performance.now();
+  });
+  el.addEventListener('pointerup', (ev) => {
+    const moved = Math.hypot(ev.clientX - _dnX, ev.clientY - _dnY);
+    if (moved > 5 || performance.now() - _dnT > 800) return;   // 拖动/长按不算点击
+    if (!root) return;
+    const r = el.getBoundingClientRect();
+    NDC.x = ((ev.clientX - r.left) / r.width) * 2 - 1;
+    NDC.y = -((ev.clientY - r.top) / r.height) * 2 + 1;
+    RAY.setFromCamera(NDC, camera);
+    const hits = RAY.intersectObject(root, true);
+    if (!hits.length) return;
+    const name = deviceNameOf(hits[0].object);
+    selectDevice(name);
+    pushClick(name);
+  });
+}
+
+/* ---------- 写入（白名单） ---------- */
+async function tryWrite(tag, whitelisted) {
+  if (!whitelisted) {
+    flash('该数值未加入写入白名单（在配置台展板行勾选「允许写入」）');
+    return;
+  }
+  if (!tag) return;
+  if (WRITABLE[tag] === undefined) {
+    const j = await fetch('/api/vars?q=' + encodeURIComponent(tag) + '&limit=20').then(r => r.json());
+    const hit = (j.vars || []).find(v => v.n === tag);
+    WRITABLE[tag] = hit ? !!hit.w : false;
+    if (!hit) { alert('变量表里没有：' + tag); return; }
+    if (!hit.w) { alert('该变量不可写（WinCC 里写授权未开放）：' + tag); return; }
+  } else if (!WRITABLE[tag]) { alert('该变量不可写：' + tag); return; }
+
+  const cur = VALUES[tag];
+  const val = prompt(`写入 ${tag}\n当前值：${cur}\n请输入新值：`, '');
+  if (val === null || val === '') return;
+  if (!confirm(`确认写入？\n${tag} = ${val}`)) return;
+  const r = await fetch('/api/write', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ n: tag, v: val })
+  }).then(x => x.json());
+  if (r.errorcode && r.errorcode !== 0) alert('写入失败：errorcode ' + r.errorcode);
+}
+
+boot();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

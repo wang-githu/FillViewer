@@ -1,0 +1,2857 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>3D 画面配置台 · v2</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font: 13px/1.5 "Microsoft YaHei", system-ui, sans-serif; color: #dbe9f4;
+         background: #0f1c28; display: grid; grid-template-rows: 46px 1fr; grid-template-columns: 250px 1fr 380px;
+         grid-template-areas: "top top top" "left stage right"; }
+  #top { grid-area: top; display: flex; align-items: center; gap: 10px; padding: 0 12px;
+         background: #14293a; border-bottom: 1px solid #24405a; }
+  #left { grid-area: left; background: #122231; border-right: 1px solid #24405a; overflow: auto; padding: 10px; }
+  #stage { grid-area: stage; position: relative; background: #dce8f2; }
+  #right { grid-area: right; background: #122231; border-left: 1px solid #24405a; overflow: auto; }
+  canvas { display: block; }
+
+  /* 展板（与运行画面同一套观感） */
+  .pnl { pointer-events: none; background: rgba(10,26,40,.88); border: 1px solid #2b6da3;
+         border-left: 3px solid #35a7ff; border-radius: 6px; padding: 6px 9px; color: #dbe9f4;
+         font-size: 12px; line-height: 1.45; box-shadow: 0 4px 16px rgba(0,0,0,.35);
+         backdrop-filter: blur(2px); white-space: nowrap; }
+  .pnl h4 { margin: 0 0 3px; font-size: 13px; color: #9fd8ff; font-weight: 600; }
+  .pnl .r { display: flex; justify-content: space-between; gap: 14px; }
+  .pnl .k { color: #9fb4c6; }
+  .pnl .v { color: #ffe08a; font-variant-numeric: tabular-nums; }
+  .pnl.prev { opacity:.96; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
+  .pnl.dev { outline: 2px dashed #4ea3ff; outline-offset: 3px; box-shadow: 0 8px 26px rgba(0,0,0,.5); }
+  .pnl.dev .devhint { margin-top: 5px; font-size: 10px; color: #9fd8ff; opacity: .85; }
+
+  h3 { font-size: 13px; margin: 14px 0 8px; color: #7fb6da; font-weight: 600; }
+  h3:first-child { margin-top: 0; }
+  input, select, textarea, button { font: inherit; }
+  input, select, textarea { width: 100%; padding: 5px 7px; border-radius: 5px;
+      border: 1px solid #2c4a63; background: #0d1a25; color: #dbe9f4; outline: none; }
+  button { padding: 5px 10px; border-radius: 5px; border: 1px solid #2c4a63;
+           background: #1b3a52; color: #dbe9f4; cursor: pointer; }
+  button:hover { background: #23506f; }
+  button.primary { background: #1786bf; border-color: #2aa5e6; font-weight: 600; }
+  button.danger  { background: #7d2230; border-color: #b73347; }
+  button.sm { padding: 2px 7px; font-size: 12px; }
+  .row { display: flex; gap: 6px; align-items: center; margin-bottom: 7px; }
+  .row > label { flex: 0 0 62px; color: #86a8c0; font-size: 12px; }
+  .card { background: #16293a; border: 1px solid #23405a; border-radius: 7px; padding: 9px 10px; margin-bottom: 8px; }
+  .card.sel { border-color: #2aa5e6; box-shadow: 0 0 0 1px #2aa5e6 inset; }
+  .muted { color: #7e9bb1; font-size: 12px; }
+  .tag { display: inline-block; padding: 0 6px; border-radius: 4px; background: #1d3d55; color: #8ecdf0; font-size: 11px; }
+  .tabs { display: flex; border-bottom: 1px solid #24405a; }
+  .tabs > div { padding: 8px 14px; cursor: pointer; color: #86a8c0; }
+  .tabs > div.on { color: #fff; border-bottom: 2px solid #2aa5e6; }
+  .pane { padding: 10px; display: none; }
+  .pane.on { display: block; }
+  #hud { position: absolute; left: 10px; top: 10px; background: rgba(10,26,40,.82);
+         padding: 7px 10px; border-radius: 6px; font-size: 12px; line-height: 1.6; color: #cfe6f8; }
+  #status { margin-left: auto; font-size: 12px; color: #8fc7e8; }
+  .list-item { display: flex; gap: 6px; align-items: center; padding: 5px 0; border-bottom: 1px dashed #22405a; }
+  .list-item .grow { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .obj-name { cursor: pointer; }
+  .obj-name:hover { color: #6fd0ff; }
+  .warn { color: #ffb454; }
+  #status { margin-left: auto; color: #9fd8ff; font-size: 12px; max-width: 46vw;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<div id="top">
+  <b>3D 画面配置台</b>
+  <span class="muted">项目</span>
+  <select id="projSel" style="width:190px"></select>
+  <button id="btnNewProj" class="sm">新建</button>
+  <button id="btnImport" class="sm">导入模型</button>
+  <input id="fileInput" type="file" accept=".glb" style="display:none">
+  <button id="btnAutoBind" class="sm">按名自动绑定</button>
+  <button id="btnSave" class="primary sm">保存</button>
+  <button id="btnRun" class="sm">打开运行画面</button>
+  <button id="btnVardata" class="sm" title="查看变量是否读到、数据源/质量，并可直接写入">变量数据</button>
+  <span id="status"></span>
+</div>
+
+<div id="left">
+  <h3>对象（点击选中）</h3>
+  <div class="row"><input id="objFilter" placeholder="过滤对象名"></div>
+  <div class="muted" id="objCount"></div>
+  <div id="objList"></div>
+</div>
+
+<div id="stage">
+  <div id="hud">未加载项目</div>
+</div>
+
+<div id="right">
+  <div class="tabs">
+    <div data-pane="bind" class="on">绑定</div>
+    <div data-pane="panel">展板</div>
+    <div data-pane="pipe">管道</div>
+    <div data-pane="all">全部</div>
+    <div data-pane="set">设置</div>
+  </div>
+
+  <div class="pane on" id="pane-bind">
+    <div class="row"><label>对象</label><input id="bObj" readonly></div>
+    <div class="row"><label>类型</label>
+      <select id="bType">
+        <option value="color">颜色（按状态/阈值）</option>
+        <option value="level">缩放（按数值，纵向）</option>
+        <option value="rot">角度（按数值，绝对值）</option>
+        <option value="spin">旋转动画（按状态启停 + 数值调速）</option>
+        <option value="state">状态规则（多变量 → 颜色，按顺序取第一条命中）</option>
+        <option value="grad">颜色渐变（按数值，两个端点色之间过渡）</option>
+      </select>
+    </div>
+    <div class="row"><label>变量</label><input id="bTag" list="varList" placeholder="变量名，或直接填固定数字（如 1000）"></div>
+    <datalist id="varList"></datalist>
+    <div class="row"><label>范围</label>
+      <input id="bMin" type="number" step="any" placeholder="最小">
+      <input id="bMax" type="number" step="any" placeholder="最大">
+    </div>
+    <div class="row" id="rowFactor"><label>系数</label><input id="bFactor" type="number" step="any" placeholder="默认 1"></div>
+    <div class="row" id="rowColor"><label>颜色</label><input id="bColor" type="color" value="#ff2d2d" style="padding:2px"></div>
+    <div class="row" id="rowGrad" style="display:none"><label>起始色</label>
+      <input id="bC0" type="color" value="#ff2d2d" style="padding:2px;flex:0 0 46px">
+      <label style="margin-left:8px">终止色</label>
+      <input id="bC1" type="color" value="#22c55e" style="padding:2px;flex:0 0 46px">
+    </div>
+    <div class="row" id="rowGradBar" style="display:none"><label></label>
+      <div id="gradBar" style="flex:1;height:14px;border-radius:4px;border:1px solid #2a4a63;
+           background:linear-gradient(90deg,#ff2d2d,#22c55e)"></div>
+    </div>
+    <div class="row" id="rowGradHint" style="display:none"><label></label>
+      <span class="muted" style="font-size:11px;line-height:1.5">
+        数值在「范围」内线性映射 0~100%，颜色按 HSL 插值（红→黄→绿），可当阀门开度、电流百分比用。</span>
+    </div>
+    <div class="row" id="rowGate"><label>启停变量</label><input id="bGate" list="varList" placeholder="可选，非 0 才转"></div><div class="muted" id="gateWarn" style="display:none;color:#ffb4b4;font-size:11px;margin:-4px 0 6px 0"></div>
+    <div id="rowRules" style="display:none">
+      <div class="muted">一条设备可以有多条规则，<b>从上到下取第一条命中</b>的；都不命中就恢复模型原色。<br>
+        「等于」用于 0/1 状态位；「区间」用于模拟量（如 0~50 绿、50~80 黄、80~ 红，上限留空表示不限）。</div>
+      <div id="bRules"></div>
+      <div class="row"><label>闪烁频率</label>
+        <input id="bBlinkHz" type="number" step="0.5" min="0.2" value="1.5" style="max-width:90px">
+        <span class="muted" style="margin-left:6px">Hz（勾了「闪」的规则生效时用）</span>
+      </div>
+      <div class="row"><button class="sm" id="btnAddRule" style="flex:1">+ 加一条规则</button></div>
+    </div>
+
+    <div class="row" id="rowLit" style="display:none"><label></label><span class="muted" style="font-size:11px;line-height:1.5">「变量」可以直接填固定数字（例如 <b>1000</b>）：按这个数值对应的转速一直转，不读 PLC。</span></div><div class="row" id="rowSpeed"><label>最大转速</label><input id="bSpeed" type="number" step="any" value="1.5" placeholder="弧度/秒"><span class="muted" style="font-size:11px;flex:0 0 auto">rad/s · 6.28≈1转/秒</span></div>
+    <div class="row" id="rowAxis"><label>旋转轴</label>
+      <select id="bAxis" style="flex:1">
+        <option value="y">Y 轴（竖直，俯视看圆）</option>
+        <option value="x">X 轴（水平，绕 X 侧翻）</option>
+        <option value="z">Z 轴（水平，绕 Z 前后翻）</option>
+      </select>
+      <span class="muted" style="font-size:11px;flex:0 0 auto">绕哪根轴转</span>
+    </div>
+    <div class="row" id="rowSpinDir"><label>旋转方向</label>
+      <select id="bSpinDir" style="flex:1">
+        <option value="1">顺时针（俯视）</option>
+        <option value="-1">逆时针（俯视）</option>
+      </select>
+      <span class="muted" style="font-size:11px;flex:0 0 auto">与实际相反就选另一个</span>
+    </div>
+    <div class="row"><label></label><button class="primary" id="btnAddBind" style="flex:1">加到绑定</button></div>
+    <div class="row"><label></label><button class="sm danger" id="btnDelBind" style="flex:1" title="删除当前正在编辑的这条绑定（立即保存）">删除当前编辑的规则</button></div>
+    <div id="tplBar" style="display:none;margin:8px 0;padding:8px;border:1px solid #2f6f4f;border-radius:6px;background:#12301f">
+      <div style="font-size:12px;color:#9fe6b5">模板：<b id="tplName"></b></div>
+      <div class="row" style="margin-top:6px">
+        <button class="sm" id="btnTplApply" style="flex:1">套用到当前对象</button>
+        <button class="sm" id="btnTplMulti" style="flex:1;margin-left:4px;display:none"></button>
+      </div>
+      <div class="row" style="margin-top:4px">
+        <button class="sm" id="btnTplClear" style="flex:1;background:#3a1f1f;border-color:#7a3b3b">清除模板</button>
+      </div>
+    </div>
+    <h3>该对象的规则 <span id="selBindsCnt" class="muted"></span></h3>
+    <div id="selBinds"><div class="muted">选中对象后显示它已经配好的绑定</div></div>
+    <div class="muted" id="bindHint">先在左边或 3D 里选一个对象</div>
+
+    <h3 style="margin-top:14px">未匹配对象 <span class="muted" id="umCount"></span></h3>
+    <div class="muted" id="umHint">点「按名自动绑定」后，对不上的对象会列在这里，附候选变量</div>
+    <div id="umList" style="max-height:300px;overflow:auto"></div>
+  </div>
+
+  <div class="pane" id="pane-panel">
+    <div class="row"><label>对象</label><input id="pObj" readonly></div>
+    <div class="row"><label>标题</label><input id="pTitle" placeholder="如：1#充填泵"></div>
+    <div class="row">
+      <label>宽度</label><input id="pW" type="number" min="80" step="10" placeholder="px（留空自适应）" style="max-width:120px">
+      <label style="flex:0 0 42px">字号</label><input id="pFs" type="number" min="8" step="1" placeholder="px" style="max-width:70px">
+    </div>
+    <div class="row"><label></label>
+      <button class="sm" id="btnApplySizeAll" title="把上面的宽度/字号套到全部展板">宽度/字号应用到所有展板</button>
+    </div>
+    <div class="muted" style="font-size:11px">高度随「行（关键参数）」条数自动；宽度留空=按内容自适应。看板互相重叠时，勾「固定位置」后可以拖动摆放（Ctrl=0.1 m 步进、靠近自动对齐）。</div>
+    <div class="row"><label>固定位置</label>
+      <input id="pFixed" type="checkbox" style="width:auto"> <span class="muted">勾选后用下面坐标，不勾选则跟随对象</span>
+    </div>
+    <div class="row"><label>坐标</label>
+      <input id="pX" type="number" step="any" placeholder="X">
+      <input id="pY" type="number" step="any" placeholder="Y">
+      <input id="pZ" type="number" step="any" placeholder="Z">
+    </div>
+    <div class="row"><label></label>
+      <button class="sm" id="btnPickPos" style="flex:1">在 3D 里点一下定位置</button>
+    </div>
+    <div class="muted" id="pickHint">点按钮后，到中间 3D 画面里点罐口/法兰，坐标自动填好</div>
+    <h3 style="margin-top:12px">显示控制</h3>
+    <div class="row"><label>变量</label>
+      <input id="pVHide" list="varList" placeholder="留空=始终显示">
+    </div>
+    <div class="muted" style="font-size:11px;line-height:1.5">
+      该变量 <b>= 0 时显示</b>本展板，<b>≠ 0（如 1）时隐藏</b>。<br>
+      变量读不到时按「显示」处理（断线也不会把信息藏起来）。<br>
+      例：变量填 <code>Demo_JB1_YC1</code>，它为 1 时这块展板就消失。
+    </div>
+    <h3 style="margin-top:12px">行（关键参数）</h3>
+    <div id="pRows"></div>
+    <button class="sm" id="btnAddRow">+ 增加一行</button>
+    <button class="sm" id="btnRetarget" title="把每行变量里的设备号替换成当前对象的设备号">变量改成当前设备</button>
+    <button class="sm" id="btnUndoTpl" style="display:none" title="撤回上一次套用模板">撤销上次套用</button>
+    <button class="sm" id="btnPrevAll" title="按保存的位置把全部展板画到 3D 里（只读预览）">预览全部展板</button>
+    <div class="row" style="margin:8px 0 0">
+      <label style="width:auto;margin-right:6px">拖动方向</label>
+      <button class="sm" data-dm="plane" style="background:#2b6da3;border-color:#3d8fd1">平面</button>
+      <button class="sm" data-dm="y">上下 Y</button>
+      <button class="sm" data-dm="depth">前后</button>
+    </div>
+    <div class="muted" style="font-size:11px;margin-top:4px">在 3D 里按住展板即可拖动；Shift=只上下、Alt=前后推拉、<b>Ctrl=0.1 m 步进</b>；靠近其它展板会自动对齐并出现虚线；松手靠近设备会自动吸附到设备顶部。</div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="btnAddPanel" style="flex:1">保存展板（并退出）</button>
+      <button class="sm" id="btnExitPanel" title="放弃未保存的修改，退出编辑">退出编辑</button>
+      <button class="sm danger" id="btnDelPanel" title="删除当前正在编辑的这块展板（立即保存）">删除展板</button>
+      <span id="panelEditState" class="muted" style="font-size:11px;align-self:center"></span>
+    </div>
+    <div style="margin:10px 0 0;padding:7px;border:1px solid #2f4f6f;border-radius:6px;background:#0f2434">
+      <div class="muted" style="margin-bottom:4px">看板模板：存布局与行，套用时保留当前看板的绑定对象</div>
+      <select id="pTplSel" style="margin-bottom:5px"></select>
+      <div style="display:flex;gap:6px">
+        <button class="sm primary" id="btnPTplApply" style="flex:1">套用到当前看板</button>
+        <button class="sm danger" id="btnPTplDel">删除模板</button>
+      </div>
+    </div>
+
+  </div>
+
+
+  <div class="pane" id="pane-pipe">
+    <div class="muted" id="pipeHint">
+      在<b>左边列表或 3D 画面里直接点</b>多段管子即可多选（再点一次取消，Ctrl/Shift 仍可用）→ 点下面按钮建成一组管线
+    </div>
+    <div class="row"><label>已选</label><span id="multiCount" class="muted">0 个对象</span></div>
+    <div class="row"><label></label>
+      <button class="primary" id="btnMakePipe" style="flex:1">把选中的对象建成管线</button>
+    </div>
+    <div class="row"><label></label>
+      <button class="sm" id="btnClearMulti" style="flex:1">清空多选</button>
+      <button class="sm" id="btnSavePipes" style="background:#1b4f6d;border-color:#2a6f95">保存全部管线</button>
+    </div>
+    <div class="row"><label></label>
+      <button class="sm" id="btnTestAll" style="flex:1">▶ 全部管线跑一遍（测试）</button>
+    </div>
+    <div class="muted" id="pipeTestHint">测试只在本页预览，不影响保存的配置</div>
+
+    <div class="row" style="margin-top:10px"><label>模板</label>
+      <select id="pipeTplSel" style="flex:1"></select>
+      <button class="sm danger" id="btnPipeTplDel">删除模板</button>
+    </div>
+    <div class="muted">模板只保存颜色 / 速度 / 粒子等外观参数（不含对象与条件）；套用在每张管线卡片右侧的「套用模板…」里选</div>
+
+    <h3 style="margin-top:14px">管线（<span id="cntPipe">0</span>）</h3>
+    <div id="listPipe" style="max-height:420px;overflow:auto"></div>
+    <div class="muted" style="margin-top:8px">
+      条件表达式示例：<br>
+      <code>Demo_AMDL1_BJ21 &gt; 100</code><br>
+      <code>Demo_YL1YW1_PJ1 &gt; 0.5 &amp;&amp; Demo_CT1YW1_PJ1 &lt; 3</code><br>
+      <code>Demo_ZF1_KD1 == 1 || Demo_ZF2_KD1 == 1</code><br>
+      支持：数字、变量名、<code>&gt; &lt; &gt;= &lt;= == != &amp;&amp; || ! ( ) + - * /</code>
+    </div>
+  </div>
+
+  <div class="pane" id="pane-all">
+    <div id="healthBox" style="margin-bottom:10px"></div>
+<h3>绑定（<span id="cntBind">0</span>）</h3>
+    <div id="listBind"></div>
+    <h3>展板（<span id="cntPanel">0</span>）</h3>
+    <div id="listPanel"></div>
+  </div>
+
+  <div class="pane" id="pane-set">
+    <h3>项目存放位置</h3>
+    <div class="muted" id="projPathLine">读取中…</div>
+    <div class="row"><button class="sm" id="btnProjPath" style="flex:1">刷新路径</button></div>
+
+    <h3>REST 连接</h3>
+    <div class="row"><label>地址</label><input id="sRest" placeholder="https://host:8092/WinCCRestService"></div>
+    <div class="muted">留空则用全局配置（server.py 里的 REST_BASE）</div>
+    <h3>引擎光/画质</h3>
+    <div class="row"><label>画质</label>
+      <select id="sQ"><option value="low">低</option><option value="mid">中</option><option value="high">高</option></select>
+    </div>
+    <div class="row"><label>背景</label>
+      <select id="sBg"><option value="light">浅色</option><option value="dark">深色</option></select>
+    </div>
+    <h3>运行选项</h3>
+    <div class="muted">控制「开机是否自动启动服务」「启动后是否自动打开运行画面」「打开哪个项目/模型」。自启项写在当前用户的启动文件夹里，不需要管理员权限。</div>
+    <div class="row" style="align-items:flex-start">
+      <label style="flex:0 0 96px">自启方式</label>
+      <div style="flex:1;min-width:0">
+        <label style="display:block;font-size:12px;color:#cfe3f2"><input type="radio" name="rtMode" id="rtModeNone" value="none"> 不启用</label>
+        <label style="display:block;font-size:12px;color:#cfe3f2"><input type="radio" name="rtMode" id="rtModeUser" value="user"> 用户登录后启动（启动文件夹，免管理员）</label>
+        <label style="display:block;font-size:12px;color:#cfe3f2"><input type="radio" name="rtMode" id="rtModeService" value="service"> 开机即启（计划任务 / SYSTEM，需管理员）</label>
+        <div class="muted" style="font-size:11px;margin-top:2px;word-break:break-all" id="rtAutoPath"></div>
+      </div>
+    </div>
+    <div class="row" style="align-items:flex-start">
+      <label style="flex:0 0 96px">启动器 EXE</label>
+      <div style="flex:1;min-width:0">
+        <button id="btnBuildExe">生成 / 重建 FillViewer.exe</button>
+        <div class="muted" style="font-size:11px;margin-top:2px;word-break:break-all" id="rtExeInfo">双击 FillViewer.exe 即可：起服务 → 等就绪 → 开运行画面</div>
+      </div>
+    </div>
+    <div class="row" style="align-items:flex-start">
+      <label style="flex:0 0 96px">启动后自动运行</label>
+      <div style="flex:1;min-width:0">
+        <input id="rtAutoopen" type="checkbox">
+        <div class="muted" style="font-size:11px;margin-top:2px">服务就绪后自动用浏览器打开「运行画面」</div>
+      </div>
+    </div>
+    <div class="row" style="align-items:flex-start">
+      <label style="flex:0 0 96px">全屏运行</label>
+      <div style="flex:1;min-width:0">
+        <input id="rtKiosk" type="checkbox">
+        <div class="muted" style="font-size:11px;margin-top:2px">浏览器 kiosk 全屏（适合现场大屏 / 触摸屏）</div>
+      </div>
+    </div>
+    <div class="row">
+      <label style="flex:0 0 96px">默认项目</label>
+      <select id="rtProject" style="flex:1;min-width:0"></select>
+    </div>
+    <div class="row">
+      <label style="flex:0 0 96px">默认模型</label>
+      <select id="rtModel" style="flex:1;min-width:0"></select>
+    </div>
+    <div class="muted" style="font-size:11px;margin:-4px 0 6px 0">项目 / 模型留空＝沿用当前项目自己的设置；选了模型则打开运行画面时用它覆盖。</div>
+    <div class="row"><button class="primary" id="btnRtSave" style="flex:1">保存运行选项</button></div>
+    <div class="muted" id="rtStatus" style="font-size:11px;word-break:break-all"></div>
+
+    <h3>刷新与延迟</h3>
+    <div class="muted">变量变了画面不动，多半是这里太大。改小更实时，但会给 WinCC REST 增压（它限流 1000 次/10 秒）。</div>
+    <div class="row"><label>轮询间隔</label>
+      <input id="sPoll" type="number" min="80" max="5000" step="10" value="300" placeholder="300">
+      <span class="muted" style="flex:0 0 auto;font-size:11px">ms</span>
+    </div>
+    <div class="row"><label>服务器缓存</label>
+      <input id="sTtl" type="number" min="0" max="5000" step="10" value="200" placeholder="200">
+      <span class="muted" style="flex:0 0 auto;font-size:11px">ms，0＝每次直读</span>
+    </div>
+    <div class="row"><label>强制直读</label>
+      <input id="sFresh" type="checkbox">
+    </div>
+    <div class="muted" style="font-size:11px;margin:-4px 0 6px 0">勾选后每次轮询都跳过服务端缓存：最实时，但对 WinCC REST 压力最大。</div>
+    <div class="row"><button class="primary" id="btnSaveSet" style="flex:1">保存设置</button></div>
+
+    <h3>版本历史</h3>
+    <div class="muted">每次「保存」会自动给整个项目拍一张快照（绑定 / 展板 / 管线 / 模板 / 项目信息）。
+      内容没变就不新增；这里可以随时恢复到任意一版。</div>
+    <div class="row">
+      <label>保留份数</label>
+      <input id="histKeep" type="number" min="1" max="500" placeholder="40" style="flex:1">
+      <button class="sm" id="btnHistPrune">应用</button>
+    </div>
+    <div class="row">
+      <button class="sm primary" id="btnHistSnap" style="flex:1">立即备份一份</button>
+      <button class="sm" id="btnHistList">刷新</button>
+    </div>
+    <div id="histList" style="max-height:260px;overflow:auto;margin-top:6px"></div>
+    <div id="histStatus" class="muted" style="margin-top:4px"></div>
+
+    <h3>单击回写（触发 WinCC 弹窗）</h3>
+    <div class="muted">单击 3D 模型时，把该设备名写进「名称变量」，再把「动作变量」置 1 一次；
+      现场 WinCC 用 VBS 监视动作变量的上升沿即可打开对应设备的弹窗。</div>
+    <div class="row"><label>启用</label><input type="checkbox" id="sClickOn" checked style="flex:0"></div>
+    <div class="row"><label>名称变量</label><input id="sClickName" placeholder="模型名称"></div>
+    <div class="row"><label>动作变量</label><input id="sClickAct" placeholder="模型单击动作"></div>
+    <div class="row"><label>上升沿</label><input type="checkbox" id="sClickEdge" checked style="flex:0">
+      <span class="muted" style="margin-left:8px">先写 0 再写 1（推荐）</span></div>
+
+    <h3>变量表</h3>
+    <div class="muted">绑定用的变量清单。两种来源都行：
+      <br>① WinCC 变量管理器导出的 <code>.txt</code>（变量管理 → 右键 → 导出，UTF-16，Tab 分隔）
+      <br>② 自己写的 CSV，表头三列：<code>变量名,注释,可写</code>
+      <br><a href="/api/vt/import/sample" target="_blank">下载示例 CSV</a> ·
+      <a href="/api/vt" target="_blank">查看当前变量表</a></div>
+    <div class="row"><input type="file" id="vtFile" accept=".txt,.csv" style="flex:1;color:#cfe6ff"></div>
+    <div class="row"><button class="primary" id="btnVtImport" style="flex:1">导入变量表</button></div>
+    <div class="row"><label></label><span id="vtCount" class="muted" style="font-size:11px"></span></div>
+    <div class="muted" id="vtInfo">—</div>
+
+    <h3>运行地址</h3>
+    <div class="muted" id="runUrl">—</div>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "../js/three.module.js", "three/addons/": "../js/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { PipeRunner, exprTags } from '../js/pipeflow.js?v=2b';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+const $ = (id) => document.getElementById(id);
+
+/* 剥离 GLB 自带灯光：Blender 的 Sun 导出后强度是 1708/785/581 这种"物理量级"，
+   three.js 照字面当 DirectionalLight.intensity 用，几千的光强会把所有材质顶成纯白。
+   载入后剥掉，改用本页自己的三点光；要保留时 URL 加 ?gltflights=1。 */
+function stripGLBLights(rootObj) {
+  if (/[?&]gltflights=1/.test(location.search)) return 0;
+  const lights = [];
+  rootObj.traverse(o => { if (o.isLight) lights.push(o); });
+  lights.forEach(l => { if (l.parent) l.parent.remove(l); });
+  if (lights.length) console.info('[打光] 已剥离模型自带灯光 ' + lights.length + ' 盏');
+  return lights.length;
+}
+const api = (p) => fetch(p, { cache: 'no-store' }).then(r => r.json());
+const post = (p, body) => fetch(p, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+}).then(r => r.json());
+
+let PID = localStorage.getItem('studio.pid') || '';
+let PROJECT = null, BINDINGS = [], PANELS = [], PIPES = [], NODES = [];
+
+/* 只读调试钩子（探针/排障用，不影响业务） */
+/* 管线模板：下拉渲染 + 删除 */
+function renderPipeTplSel() {
+  const sel = document.getElementById('pipeTplSel');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">（共 ' + PIPE_TPLS.length + ' 个模板）</option>' +
+    PIPE_TPLS.map((t, k) => '<option value="' + k + '">' + String(t.name || ('模板' + (k + 1))).replace(/</g, '&lt;') + '</option>').join('');
+  if (cur && PIPE_TPLS[+cur]) sel.value = cur;
+}
+// ---------------- 运行选项 ----------------
+let RT_CFG = { autostart: false, autoopen: false, kiosk: false, project: '', model: '' };
+
+function rtFill(rec) {
+  RT_CFG = Object.assign({}, RT_CFG, (rec && rec.runtime) || {});
+  const $ = id => document.getElementById(id);
+  const mode = RT_CFG.autostartMode || (RT_CFG.autostart ? 'user' : 'none');
+  if ($('rtModeNone')) $('rtModeNone').checked = (mode === 'none');
+  if ($('rtModeUser')) $('rtModeUser').checked = (mode === 'user');
+  if ($('rtModeService')) $('rtModeService').checked = (mode === 'service');
+  if ($('rtAutoopen')) $('rtAutoopen').checked = !!RT_CFG.autoopen;
+  if ($('rtKiosk')) $('rtKiosk').checked = !!RT_CFG.kiosk;
+
+  const ps = (rec && rec.projects) || [];
+  if ($('rtProject')) {
+    $('rtProject').innerHTML = '<option value="">（沿用项目设置）</option>' +
+      ps.map(p => '<option value="' + p + '">' + p + '</option>').join('');
+    $('rtProject').value = RT_CFG.project || '';
+  }
+  const ms = (rec && rec.models) || [];
+  if ($('rtModel')) {
+    $('rtModel').innerHTML = '<option value="">（用项目里的模型）</option>' +
+      ms.map(m => '<option value="' + m + '">' + m + '</option>').join('');
+    $('rtModel').value = RT_CFG.model || '';
+  }
+  if ($('rtAutoPath') && rec && rec.autostart) {
+    $('rtAutoPath').textContent = (rec.autostart.enabled ? '已启用 · ' : '未启用 · ') + (rec.autostart.path || '');
+  }
+  if (rec && rec.exe && $('rtExeInfo')) {
+    $('rtExeInfo').textContent = rec.exe.exists
+      ? ('已生成：' + rec.exe.path + '（' + Math.round(rec.exe.size / 1024) + ' KB）')
+      : '尚未生成：点上面的按钮';
+  }
+  if (rec && rec.service && $('rtAutoPath')) {
+    $('rtAutoPath').textContent = '计划任务「' + rec.service.task + '」：' +
+      (rec.service.exists ? '已存在' : '不存在') +
+      (RT_CFG.lastServiceNote ? ' · ' + RT_CFG.lastServiceNote : '');
+  }
+  if ($('rtStatus')) {
+    $('rtStatus').textContent = '当前：自启 ' + ((RT_CFG.autostartMode || 'none') === 'none' ? '关' : RT_CFG.autostartMode) +
+      ' · 自动运行 ' + (RT_CFG.autoopen ? '开' : '关') +
+      ' · 全屏 ' + (RT_CFG.kiosk ? '开' : '关') +
+      ' · 项目 ' + (RT_CFG.project || '沿用') +
+      ' · 模型 ' + (RT_CFG.model || '沿用');
+  }
+}
+
+async function rtLoad() {
+  try {
+    const r = await fetch('/api/runtime').then(x => x.json());
+    if (r && r.ok) rtFill(r);
+  } catch (e) { console.warn('[runtime] load failed', e); }
+}
+
+async function rtSave() {
+  const $ = id => document.getElementById(id);
+  const modeEl = document.querySelector('input[name="rtMode"]:checked');
+  const body = {
+    autostartMode: modeEl ? modeEl.value : 'none',
+    autostart: !!(modeEl && modeEl.value !== 'none'),
+    autoopen: !!($('rtAutoopen') && $('rtAutoopen').checked),
+    kiosk: !!($('rtKiosk') && $('rtKiosk').checked),
+    project: $('rtProject') ? $('rtProject').value : '',
+    model: $('rtModel') ? $('rtModel').value : '',
+  };
+  try {
+    const r = await fetch('/api/runtime', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(x => x.json());
+    if (!r || !r.ok) { alert('保存失败：' + ((r && r.error) || '未知错误')); return; }
+    rtFill({ runtime: r.runtime, autostart: r.autostart,
+             projects: $('rtProject') ? [].map.call($('rtProject').options, o => o.value).filter(Boolean) : [],
+             models: $('rtModel') ? [].map.call($('rtModel').options, o => o.value).filter(Boolean) : [] });
+    if ($('rtStatus')) $('rtStatus').textContent += '  ← 已保存';
+  } catch (e) { alert('保存失败：' + e); }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  try {
+    if (document.getElementById('btnRtSave')) {
+      document.getElementById('btnRtSave').onclick = rtSave;
+      if (document.getElementById('btnBuildExe')) {
+        document.getElementById('btnBuildExe').onclick = async () => {
+          const $i = document.getElementById('rtExeInfo');
+          $i.textContent = '正在编译…（约 3~10 秒）';
+          try {
+            const r = await fetch('/api/build_exe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(x => x.json());
+            if (r && r.ok) { $i.textContent = '已生成：' + r.exe.path + '（' + Math.round(r.exe.size / 1024) + ' KB）'; }
+            else { $i.textContent = '生成失败：' + ((r && r.error) || '未知错误'); }
+          } catch (e) { $i.textContent = '生成失败：' + e; }
+        };
+      }
+      rtLoad();
+    }
+  } catch (e) {}
+
+  try { renderPTplSel(); renderPipeTplSel(); } catch (e) {}
+  const btnAll = document.getElementById('btnApplySizeAll');
+  if (btnAll) btnAll.onclick = async () => {
+    const w = +($('pW') && $('pW').value);
+    const fs = +($('pFs') && $('pFs').value);
+    if (!(w > 0) && !(fs > 0)) { alert('先在「宽度」「字号」里填一个值（宽度≥80、字号≥8）'); return; }
+    if (!(PANELS || []).length) { alert('还没有展板'); return; }
+    if (!confirm('把' + (w > 0 ? ('宽度 ' + w + 'px ') : '') + (fs > 0 ? ('字号 ' + fs + 'px ') : '') +
+                 '应用到全部 ' + PANELS.length + ' 块展板？')) return;
+    PANELS.forEach(p => { if (w > 0) p.w = w; if (fs > 0) p.fs = fs; });
+    const r = await persistProject();
+    setStatus(r && r.ok ? ('已应用到 ' + PANELS.length + ' 块展板并保存') : ('保存失败：' + (r && r.error)));
+    try { renderPanels && renderPanels(); } catch (e) {}
+    try { renderAllPreviews && renderAllPreviews(); } catch (e) {}
+  };
+  const delP = document.getElementById('btnDelPanel');
+  if (delP) delP.onclick = async () => {
+    let idx = _panelEditIdx;
+    if (!(idx >= 0 && PANELS[idx])) {
+      const t = (($('pTitle') && $('pTitle').value) || '').trim();
+      const ob = ($('pObj') && $('pObj').value) || '';
+      idx = PANELS.findIndex(p => (p.obj || '') === ob && ((p.title || '') === t));
+    }
+    if (!(idx >= 0 && PANELS[idx])) {
+      alert('现在没有在编辑「已保存」的展板。\n请到「全部 → 展板」列表里点某一块的「编辑」，再点删除。');
+      return;
+    }
+    const nm = PANELS[idx].title || PANELS[idx].obj;
+    if (!confirm('删除展板「' + nm + '」？删除后立即保存。')) return;
+    PANELS.splice(idx, 1);
+    const r = await persistProject();
+    exitPanelEdit(false);
+    setStatus(r && r.ok ? ('已删除展板「' + nm + '」并保存') : ('删除失败：' + (r && r.error)));
+  };
+
+  const delB = document.getElementById('btnDelBind');
+  if (delB) delB.onclick = async () => {
+    if (!(_bindEditIdx >= 0 && BINDINGS[_bindEditIdx])) {
+      alert('现在没有在编辑「已保存」的绑定。\n请在「该对象的规则」里点某条的「载入编辑」，再点删除。');
+      return;
+    }
+    const b = BINDINGS[_bindEditIdx];
+    if (!confirm('删除这条绑定（' + (TYPENAME[b.type] || b.type) + '：' + (b.tag || '') + '）？删除后立即保存。')) return;
+    BINDINGS.splice(_bindEditIdx, 1); _bindEditIdx = -1;
+    renderAll(); renderSelBinds();
+    const r = await persistProject();
+    setStatus(r && r.ok ? '已删除该条绑定并保存' : ('删除失败：' + (r && r.error)));
+  };
+
+  const del = document.getElementById('btnPipeTplDel');
+  if (del) del.onclick = () => {
+    const sel = document.getElementById('pipeTplSel');
+    const k = sel ? +sel.value : NaN;
+    if (!PIPE_TPLS.length) { alert('还没有管线模板'); return; }
+    if (!Number.isInteger(k) || !PIPE_TPLS[k]) { alert('先在上面下拉里选中要删除的模板'); return; }
+    const nm = PIPE_TPLS[k].name || ('模板' + (k + 1));
+    if (!confirm('删除模板「' + nm + '」？（点顶栏「保存」后彻底落盘）')) return;
+    PIPE_TPLS.splice(k, 1);
+    renderPipes();
+    setStatus('已删除模板「' + nm + '」，点顶栏「保存」落盘');
+  };
+});
+
+window.__studioDebug = function () {
+  return {
+    pipes: PIPES, pipeTpls: (typeof PIPE_TPLS !== 'undefined' ? PIPE_TPLS : []),
+    bindings: BINDINGS, panels: PANELS,
+    panelTpls: (typeof PANEL_TPLS !== 'undefined' ? PANEL_TPLS : []),
+    save: () => { const b = document.getElementById('btnSave'); if (b) b.click(); },
+    recordPipeTpl: (typeof recordPipeTpl === 'function' ? recordPipeTpl : null),
+    applyPipeTpl: (typeof applyPipeTpl === 'function' ? applyPipeTpl : null)
+  };
+};
+let MULTI = new Set();
+let selObj = null;                 // 当前选中对象名
+let PIPE_RUNNER = null;            // 管道效果引擎
+let LAST_DT = performance.now();
+
+/* ---------------- 3D ---------------- */
+const stage = $('stage');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xdce8f2);
+const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 5000);
+const _HQ = !/[?&]hq=0/.test(location.search);   // 默认高清；?hq=0 回到省电模式（旧行为）
+function showFatal(msg) {
+  let d = document.getElementById('fatalBox');
+  if (!d) {
+    d = document.createElement('div');
+    d.id = 'fatalBox';
+    d.style.cssText = 'position:absolute;left:50%;top:38%;transform:translate(-50%,-50%);z-index:99;'
+      + 'max-width:560px;background:#fff;border:1px solid #f0c07a;border-left:4px solid #d97706;'
+      + 'border-radius:6px;padding:14px 18px;font-size:14px;line-height:1.7;color:#3b2c14;'
+      + 'box-shadow:0 6px 24px rgba(0,0,0,.15)';
+    d.innerHTML = '<b style="color:#b45309">3D 预览无法运行</b><br>' + msg;
+    document.body.appendChild(d);
+  }
+}
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: _HQ });
+} catch (e) {
+  showFatal('浏览器无法创建 WebGL 上下文。<br>'
+    + '请用新版 Chrome/Edge 打开，或在浏览器设置里开启「使用图形加速」。<br>'
+    + '左侧对象树与右侧面板仍可使用。');
+  throw e;
+}
+renderer.setPixelRatio(_HQ ? Math.min(devicePixelRatio || 1, 1.5) : 1);
+renderer.domElement.addEventListener('webglcontextlost', function (ev) {
+  ev.preventDefault();
+  showFatal('显卡上下文丢失（画面停在最后一帧）。刷新页面即可恢复。');
+});
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+stage.appendChild(renderer.domElement);
+
+/* ---------- 配置台内展板预览（与运行画面同一套 .pnl 样式） ---------- */
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.setSize(stage.clientWidth, stage.clientHeight);
+Object.assign(labelRenderer.domElement.style, {
+  position: 'absolute', top: '0', left: '0', pointerEvents: 'none'
+});
+stage.appendChild(labelRenderer.domElement);
+let DEV_PANEL = null, DEV_EL = null, DEV_DRAGMODE = 'plane';
+
+const OBJMAP = new Map();
+const _normN = (t) => String(t || '').replace(/[.\s\[\]:/]+/g, '').toLowerCase();
+function findObj(name) {
+  if (!name) return null;
+  if (OBJMAP.has(name)) return OBJMAP.get(name);
+  const k = _normN(name);
+  for (const [n, o] of OBJMAP) if (_normN(n) === k) return o;
+  return null;
+}
+function rebuildObjMap(rootObj) {
+  OBJMAP.clear();
+  if (!rootObj) return;
+  rootObj.traverse(o => { if (o.name) OBJMAP.set(o.name, o); });
+}
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+camera.position.set(4.4, 45, 75);
+controls.target.set(4.4, 1.2, 1.5);
+
+scene.add(new THREE.HemisphereLight(0xeaf4ff, 0x6b7a88, 0.42));      // 天光 + 地面反弹
+const _key = new THREE.DirectionalLight(0xfff4e6, 1.25); _key.position.set(40, 66, 46); scene.add(_key);
+const _fill = new THREE.DirectionalLight(0xd6e6ff, 0.42); _fill.position.set(-48, 26, -30); scene.add(_fill);
+const _rim = new THREE.DirectionalLight(0xffffff, 0.28); _rim.position.set(-6, 14, -76); scene.add(_rim);
+
+/* 与运行画面同一套打光：ACES 色调映射 + 环境反射（详见 runtime.html 的注释） */
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+{
+  const _pmrem = new THREE.PMREMGenerator(renderer);
+  _pmrem.compileEquirectangularShader();
+  scene.environment = _pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+}
+
+let root = null;
+let WINDOW_MODELINFO = null;
+let needRender = true;
+let _dirtyForce = true;              // 内容变化 → 立即渲染，不被帧率上限挡
+function requestRender() { needRender = true; _dirtyForce = true; }
+controls.addEventListener('change', requestRender);
+
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  renderer.domElement.style.width = w + 'px';
+  renderer.domElement.style.height = h + 'px';
+  labelRenderer.setSize(stage.clientWidth, stage.clientHeight);
+  requestRender();
+}
+new ResizeObserver(resize).observe(stage);
+
+let _fcap = _HQ ? 60 : 24, _fsum = 0, _fn = 0, _fdeg = false, _lastRender = 0, _painted = false;
+function animate() {
+  requestAnimationFrame(animate);
+  const now = performance.now();
+  const raw = (now - LAST_DT) / 1000;
+  LAST_DT = now;
+  const dt = Math.min(0.1, Math.max(0.001, raw));
+  controls.update();
+  if (PIPE_RUNNER && PIPE_RUNNER.tick(dt)) needRender = true;   // 动画只要求"需要重绘"
+  const gated = _painted && !_dirtyForce && (now - _lastRender) < 1000 / _fcap;
+  if (needRender && !gated) {
+    renderer.render(scene, camera);
+    labelRenderer.render(scene, camera);
+    needRender = false; _dirtyForce = false; _painted = true; _lastRender = now;
+    _fn++; _fsum += dt;
+    if (_fn >= 40) {
+      if (!_fdeg && _fsum / _fn > 0.09) { _fdeg = true; renderer.setPixelRatio(_HQ ? 1 : 0.75); requestRender(); }
+      _fn = 0; _fsum = 0;
+    }
+  }
+}
+
+
+/* ---------------- 选中高亮 ---------------- */
+const hlGroup = new THREE.Group();
+scene.add(hlGroup);
+function clearHL() {
+  hlGroup.children.slice().forEach(h => { hlGroup.remove(h); if (h.geometry) h.geometry.dispose(); });
+}
+function addHL(name, colorHex) {
+  if (!root) return;
+  let o = null;
+  root.traverse(x => { if (!o && x.name === name) o = x; });
+  if (!o) return;
+  const b = new THREE.Box3().setFromObject(o);
+  if (b.isEmpty()) return;
+  const h = new THREE.Box3Helper(b, colorHex);
+  h.material.depthTest = false;
+  h.material.transparent = true;
+  h.material.opacity = 0.95;
+  h.renderOrder = 998;
+  hlGroup.add(h);
+}
+function renderHL() {
+  clearHL();
+  if (selObj) addHL(selObj, 0x2aa5e6);          // 当前对象：蓝
+  MULTI.forEach(n => { if (n !== selObj) addHL(n, 0xffb454); });  // 多选：橙
+  requestRender();
+}
+function focusOn(name) {
+  if (!root || !name) return;
+  let o = null;
+  root.traverse(x => { if (!o && x.name === name) o = x; });
+  if (!o) return;
+  const b = new THREE.Box3().setFromObject(o);
+  if (b.isEmpty()) return;
+  const c = b.getCenter(new THREE.Vector3());
+  const sz = b.getSize(new THREE.Vector3());
+  const rad = Math.max(0.35, Math.max(sz.x, sz.y, sz.z) * 1.9);
+  const dir = camera.position.clone().sub(controls.target).normalize();
+  if (!isFinite(dir.x) || dir.length() < 0.001) dir.set(0.6, 0.55, 0.75).normalize();
+  controls.target.copy(c);
+  camera.position.copy(c).add(dir.multiplyScalar(rad * 2.4));
+  camera.updateProjectionMatrix();
+  requestRender();
+  $('status').textContent = '已定位：' + name;
+}
+
+/* ---------------- 拾取 ---------------- */
+const ray = new THREE.Raycaster();
+const ptr = new THREE.Vector2();
+let downX = 0, downY = 0;
+renderer.domElement.addEventListener('pointerdown', e => { downX = e.clientX; downY = e.clientY; });
+let pickPosMode = false;
+function rebuildRunner() {
+  try { if (PIPE_RUNNER) { PIPE_RUNNER.dispose(); PIPE_RUNNER = new PipeRunner(scene, root); PIPE_RUNNER.build(PIPES); PIPE_RUNNER.apply(PIPE_VALUES); requestRender(); } } catch (e) { console.error(e); }
+}
+renderer.domElement.addEventListener('pointerup', e => {
+  if (Math.abs(e.clientX - downX) > 4 || Math.abs(e.clientY - downY) > 4) return;
+  const r = renderer.domElement.getBoundingClientRect();
+  ptr.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+  ptr.y = -((e.clientY - r.top) / r.height) * 2 + 1;
+  ray.setFromCamera(ptr, camera);
+  if (PREVIEW_ALL) {
+    const proxies = scene.children.filter(o => o.isSprite && o.userData.prevIdx !== undefined);
+    const ph = ray.intersectObjects(proxies, false);
+    if (ph.length && ph[0].distance < 60) {
+      const idx = ph[0].object.userData.prevIdx;
+      const b = $('listPanel') && $('listPanel').querySelector('[data-ep="' + idx + '"]');
+      if (b) b.click();
+      switchPane('panel');
+      setStatus('已载入「' + ((PANELS[idx] && PANELS[idx].title) || '') + '」到右侧表单');
+      return;
+    }
+  }
+  const hits = ray.intersectObjects(root ? root.children : [], true);
+  if (pickPosMode) {
+    pickPosMode = false;
+    renderer.domElement.style.cursor = '';
+    $('btnPickPos').textContent = '在 3D 里点一下定位置';
+    if (!hits.length) { $('pickHint').textContent = '没点中模型，再点一次按钮重试'; return; }
+    const p = hits[0].point;
+    $('pX').value = p.x.toFixed(3);
+    $('pY').value = p.y.toFixed(3);
+    $('pZ').value = p.z.toFixed(3);
+    $('pFixed').checked = true;
+    $('pickHint').textContent = `已取点 (${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)})，已自动勾选「固定位置」`;
+    return;
+  }
+  if (!hits.length) { selectObj(''); return; }
+  let o = hits[0].object;
+  while (o && o.parent && o.parent !== root) o = o.parent;
+  const _nm = o ? ((o.userData && o.userData.name) || o.name || '') : '';
+  if (paneIs('pipe') && _nm) {
+    /* 管道页签：点模型 = 加入/移出多选 */
+    if (MULTI.has(_nm)) MULTI.delete(_nm); else MULTI.add(_nm);
+    el_highlight(_nm);
+    renderObjList(); renderMulti(); renderHL(); requestRender();
+    setStatus(MULTI.size ? ('已选 ' + MULTI.size + ' 个对象（再点一次可取消）') : '已清空多选');
+    return;
+  }
+  selectObj(_nm);
+});
+
+function selectObj(name) {
+  const prev = selObj;
+  selObj = name || '';
+  if (prev !== selObj) {
+    ['pX', 'pY', 'pZ'].forEach(id => { if ($(id)) $(id).value = ''; });
+    if ($('pFixed')) $('pFixed').checked = false;
+    if ($('pickHint')) $('pickHint').textContent = '点按钮后，到中间 3D 画面里点罐口/法兰，坐标自动填好';
+  }
+  $('bObj').value = selObj;
+  $('pObj').value = selObj;
+  $('bindHint').textContent = selObj ? ('已选：' + selObj) : '先在左边或 3D 里选一个对象';
+  try { renderHL(); } catch (e) {}
+  try { renderSelBinds(); } catch (e) {}
+  try { renderTplBar(); } catch (e) {}
+  requestRender();
+}
+
+/* ---------------- 项目 ---------------- */
+async function loadProjects() {
+  const j = await api('/api/projects');
+  const sel = $('projSel');
+  sel.innerHTML = (j.projects || []).map(p =>
+    `<option value="${p.id}">${p.name || p.id}</option>`).join('') || '<option value="">（无项目）</option>';
+  if (PID && (j.projects || []).some(p => p.id === PID)) sel.value = PID;
+  else if ((j.projects || []).length) { PID = j.projects[0].id; sel.value = PID; }
+}
+
+async function loadProject() {
+  if (!PID) { $('hud').innerHTML = '先在左上角新建一个项目'; return; }
+  localStorage.setItem('studio.pid', PID);
+  PROJECT = await api('/api/project?id=' + encodeURIComponent(PID));
+  BINDINGS = (PROJECT.bindings && PROJECT.bindings.items) || [];
+  PANELS = (PROJECT.panels && PROJECT.panels.items) || [];
+  PIPES = (PROJECT.pipes && PROJECT.pipes.items) || [];
+  PANEL_TPLS = PROJECT.panelTpls || [];
+  try { renderPTplSel(); } catch (e) {}
+  PIPE_TPLS = PROJECT.pipeTpls || [];
+  MULTI.clear();
+  const pj = PROJECT.project || {};
+  $('sRest').value = (pj.rest && pj.rest.base) || '';
+  $('sQ').value = pj.quality || 'high';
+  $('sBg').value = pj.background || 'light';
+  if ($('sPoll')) $('sPoll').value = (pj.poll ?? 300);
+  if ($('sTtl')) $('sTtl').value = (pj.liveTtl ?? 200);
+  if ($('sFresh')) $('sFresh').checked = !!pj.fresh;
+  $('runUrl').textContent = location.origin + '/app/runtime.html?p=' + PID;
+  const ck = pj.click || {};
+  $('sClickOn').checked = ck.enabled !== false;
+  $('sClickName').value = ck.nameVar || '模型名称';
+  $('sClickAct').value = ck.actionVar || '模型单击动作';
+  $('sClickEdge').checked = ck.edge !== false;
+  renderAll();
+  UNMATCHED = [];
+  renderUnmatched();
+  await loadModel(pj.model);
+  await loadNodes();
+  setTimeout(() => { try { runHealth(); } catch (e) { } }, 400);
+  try {
+    if ($('btnProjPath')) $('btnProjPath').onclick = loadProjPath;
+    if ($('btnHistList')) $('btnHistList').onclick = loadHistList;
+    setTimeout(function () {
+      try { loadProjPath(); } catch (e) { }
+      try { loadHistList(); } catch (e) { }
+    }, 300);
+    if ($('btnHistSnap')) $('btnHistSnap').onclick = histSnapshotNow;
+    if ($('btnHistPrune')) $('btnHistPrune').onclick = histPrune;
+  } catch (e) { }
+}
+
+async function loadModel(model) {
+  if (root) { scene.remove(root); root = null; }
+  $('hud').innerHTML = '模型：' + (model || '未导入') + '<br>正在加载…';
+  if (!model) { requestRender(); return; }
+  const url = '/projects/' + PID + '/model/' + model;
+  new GLTFLoader().load(url, (g) => {
+    root = g.scene;
+    stripGLBLights(root);
+    scene.add(root);
+    rebuildObjMap(root);
+    const box = new THREE.Box3().setFromObject(root);
+    const c = box.getCenter(new THREE.Vector3());
+    const s = box.getSize(new THREE.Vector3());
+    controls.target.copy(c);
+    camera.position.set(c.x + s.x * 0.9, c.y + s.y * 1.1, c.z + s.z * 1.35);
+    $('hud').innerHTML = `项目：${(PROJECT.project||{}).name||PID}<br>模型：${model}<br>` +
+      `根节点：${g.scene.children.length} 个` +
+      `<br>绑定 ${BINDINGS.length} · 展板 ${PANELS.length} · 管线 ${PIPES.length}<br><span class="muted" style="font-size:11px">构建 2026-11-18 22:21</span>`;
+    if (PIPE_RUNNER) PIPE_RUNNER.dispose();
+    PIPE_RUNNER = new PipeRunner(scene, root);
+    PIPE_RUNNER.build(PIPES);
+    renderHL();
+    requestRender();
+    autoCheckModel();
+  }, undefined, (e) => { $('hud').innerHTML = '<span style="color:#c33">模型加载失败：' + url + '</span>'; });
+}
+
+
+
+/* ---------- 变量表导入 ---------- */
+function vtInit() {
+  const btn = $('btnVtImport'); if (!btn) return;
+  btn.onclick = async () => {
+    const f = $('vtFile').files && $('vtFile').files[0];
+    if (!f) { $('vtInfo').textContent = '先选一个文件（.txt 或 .csv）'; return; }
+    btn.disabled = true; $('vtInfo').textContent = '正在导入 ' + f.name + ' …';
+    try {
+      const buf = await f.arrayBuffer();
+      const r = await fetch('/api/vt/import', { method: 'POST', body: buf,
+        headers: { 'Content-Type': 'application/octet-stream' } });
+      const j = await r.json();
+      if (!j.ok) { $('vtInfo').textContent = '导入失败：' + (j.error || r.status); return; }
+      const top = (j.systems || []).slice(0, 6).map(x => x.name + ' ' + x.count).join(' · ');
+      $('vtInfo').innerHTML = `✅ 导入成功：共 <b>${j.total}</b> 个变量，可写 <b>${j.writable}</b> 个，
+        系统 <b>${j.systems.length}</b> 个<br>${top}${j.systems.length > 6 ? ' …' : ''}
+        <br><span class="muted">来源：${j.how}；已备份旧表为 vartable.json.bak</span>`;
+      await loadVars();    // 刷新变量下拉
+    } catch (e) {
+      $('vtInfo').textContent = '导入失败：' + e;
+    } finally { btn.disabled = false; }
+  };
+}
+setTimeout(vtInit, 300);
+
+/* 模型体检：材质缺失 / 全白材质 / 灯光过强 → 直接在 HUD 里说明 */
+async function autoCheckModel() {
+  try {
+    const j = await api('/api/glbcheck?id=' + encodeURIComponent(PID));
+    if (!j || j.error) return;
+    WINDOW_MODELINFO = j;
+    if (j.hints && j.hints.length) {
+      $('hud').innerHTML += '<br><span style="color:#b45309">⚠ ' + j.hints.join('<br>⚠ ') + '</span>';
+    }
+    const el = document.getElementById('hud');
+    if (el) el.title = '材质 ' + j.materials + ' · 贴图 ' + j.images + ' · 无材质图元 ' + j.noMaterialPrims
+      + ' · 纯白材质 ' + j.whiteMaterials + ' · 三角面 ' + j.triangles;
+  } catch (e) { }
+}
+
+async function loadNodes() {
+  const j = await api('/api/project/objects?id=' + encodeURIComponent(PID));
+  NODES = (j.nodes || []).filter(n => n.mesh);
+  $('objCount').textContent = NODES.length + ' 个网格对象';
+  renderObjList();
+}
+
+function renderObjList() {
+  const q = ($('objFilter').value || '').toLowerCase();
+  const list = NODES.filter(n => !q || n.name.toLowerCase().includes(q)).slice(0, 400);
+  $('objList').innerHTML = list.map(n =>
+    `<div class="list-item"><span class="obj-name grow" data-obj="${n.name}">${n.name}</span>` +
+    `<span class="muted">${n.tris}</span></div>`).join('');
+  $('objList').querySelectorAll('.obj-name').forEach(el => {
+    const nm = el.dataset.obj;
+    if (MULTI.has(nm)) el.style.background = '#1d4d70';
+    el.onclick = (ev) => {
+      const _piping = paneIs('pipe');
+      if (ev.ctrlKey || ev.metaKey || (_piping && !ev.shiftKey)) {
+        if (MULTI.has(nm)) MULTI.delete(nm); else MULTI.add(nm);
+        renderObjList(); renderMulti(); renderHL();
+      } else if (ev.shiftKey) {
+        const all = Array.from($('objList').querySelectorAll('.obj-name')).map(x => x.dataset.obj);
+        const last = selObj && all.indexOf(selObj) >= 0 ? all.indexOf(selObj) : 0;
+        const cur = all.indexOf(nm);
+        const [a, b] = last < cur ? [last, cur] : [cur, last];
+        for (let i = a; i <= b; i++) MULTI.add(all[i]);
+        renderObjList(); renderMulti(); renderHL();
+      } else {
+        selectObj(nm);
+      }
+    };
+    el.ondblclick = () => { selectObj(nm); focusOn(nm); };
+    const _unused = (ev2) => {
+    };
+  });
+}
+
+
+/* ---------------- 管道（高亮 / 液体流动） ---------------- */
+function el_highlight(nm) {
+  const el = $('objList') && $('objList').querySelector('.obj-name[data-obj="' + CSS.escape(nm) + '"]');
+  if (el) el.style.background = MULTI.has(nm) ? '#1d4d70' : '';
+}
+
+function renderMulti() {
+  $('multiCount').textContent = MULTI.size + ' 个对象';
+  if ($('btnMakePipe')) $('btnMakePipe').textContent =
+    MULTI.size ? ('把选中的 ' + MULTI.size + ' 个对象建成管线') : '把选中的对象建成管线';
+}
+
+if ($('btnSavePipes')) $('btnSavePipes').onclick = saveAllPipes;
+
+function pipeModeText(m) {
+  return m === 'hl' ? '只高亮' : m === 'flow' ? '只流动' : '高亮+流动';
+}
+
+async function savePipeAt(i) {
+  const p = PIPES[i];
+  if (!p) return;
+  const g = sel => {
+    const key = String(sel).replace(/[\[\]]/g, '');
+    const el = document.querySelector('[' + key + '="' + i + '"]');
+    return el ? el.value : undefined;
+  };
+  const set = (k, v, num) => {
+    if (v === undefined) return;
+    if (!num && v === '') return;
+    p[k] = num ? Number(v) : v;
+  };
+  set('name', g('[data-pn]'));
+  set('expr', g('[data-pe]'));
+  set('speedVar', g('[data-pv]'));
+  set('speed', g('[data-ps]'), true);
+  set('gap', g('[data-pg]'), true);
+  set('speedFull', g('[data-pf]'), true);
+  set('ramp', g('[data-prp]'), true);
+  set('count', g('[data-pcnt]'), true);
+  set('core', g('[data-pcore]'), true);
+  set('tail', g('[data-ptail]'), true);
+  const c = g('[data-pc]'); if (c) p.color = c;
+  const m = g('[data-pm]'); if (m) p.mode = m;
+  const rv = g('[data-prv]'); if (rv !== undefined) p.reverse = rv;
+  try { rebuildRunner(); } catch (e) {}
+  await persistProject();
+  setStatus('已保存管线「' + (p.name || ('管线 ' + (i + 1))) + '」');
+}
+
+async function saveAllPipes() {
+  if (!PIPES.length) { setStatus('还没有管线可保存'); return; }
+  for (let i = 0; i < PIPES.length; i++) await savePipeAt(i);
+  setStatus('已保存全部 ' + PIPES.length + ' 条管线');
+}
+
+function renderPipes() {
+  $('cntPipe').textContent = PIPES.length;
+  renderMulti();
+  const box = $('listPipe');
+  if (!PIPES.length) {
+    box.innerHTML = '<div class="muted">还没有管线。先在左边多选管子，再点上面的按钮。</div>';
+    return;
+  }
+  box.innerHTML = PIPES.map((p, i) => `
+    <div class="list-item" style="flex-wrap:wrap;gap:6px;padding:8px 6px;border-bottom:1px solid #1b3b52">
+      <div style="flex:1 1 100%;display:flex;gap:6px;align-items:center">
+        <input data-pn="${i}" value="${(p.name || '').replace(/"/g, '&quot;')}"
+               style="flex:1;background:#0e2231;border:1px solid #21475f;color:#dfefff;border-radius:4px;padding:3px 6px">
+        <button class="sm" data-psave="${i}" style="background:#1b4f6d;border-color:#2a6f95">保存</button>
+        <button class="sm" data-ptpl="${i}" style="background:#1b4f6d;border-color:#2a6f95" title="把这条管线的颜色/速度/粒子等参数存成模板">存为模板</button>
+        <button class="sm" data-ptest="${i}" style="background:#17503f;border-color:#1f6b53">测试</button>
+        <button class="sm" data-pdel="${i}" style="background:#5d2230;border-color:#7d2d3f">删除</button>
+      </div>
+      <div style="flex:1 1 100%;color:#8fb2cc;font-size:12px;display:flex;gap:8px;align-items:center">
+        <span>对象 ${(p.objs || []).length} 个 · ${pipeModeText(p.mode || 'flow')}</span>
+        <select data-papt="${i}" style="background:#0e2231;border:1px solid #21475f;color:#dfefff;border-radius:4px;padding:2px 4px;font-size:12px">
+          <option value="">套用模板…</option>
+          ${PIPE_TPLS.map((t, k) => `<option value="${k}">${(t.name || ('模板' + (k + 1))).replace(/</g, '&lt;')}</option>`).join('')}
+        </select>
+      </div>
+      <div style="flex:1 1 100%;display:flex;gap:6px;align-items:center">
+        <span style="color:#8fb2cc;font-size:12px;width:52px">条件</span>
+        <input data-pe="${i}" value="${(p.expr || '').replace(/"/g, '&quot;')}" placeholder="如 Demo_AMDL1_BJ21 > 100"
+               style="flex:1;background:#0e2231;border:1px solid #21475f;color:#dfefff;border-radius:4px;padding:3px 6px;font-family:Consolas,monospace">
+      </div>
+      <div style="flex:1 1 100%;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <select data-pm="${i}" style="background:#0e2231;border:1px solid #21475f;color:#dfefff;border-radius:4px;padding:3px">
+          <option value="flow" ${(p.mode || 'flow') === 'flow' ? 'selected' : ''}>只流动</option>
+          <option value="hl" ${p.mode === 'hl' ? 'selected' : ''}>只高亮</option>
+          <option value="both" ${p.mode === 'both' ? 'selected' : ''}>高亮+流动</option>
+        </select>
+        <input type="color" data-pc="${i}" value="${p.color || '#19ffd8'}" style="width:42px;padding:1px">
+        <span style="color:#8fb2cc;font-size:12px">速度</span>
+        <input data-ps="${i}" type="number" step="any" value="${p.speed ?? 8}" style="width:62px;background:#0e2231;border:1px solid #21475f;color:#dfefff;border-radius:4px;padding:3px">
+        <span style="color:#8fb2cc;font-size:12px">间距</span>
+        <input data-pg="${i}" type="number" step="any" value="${p.gap ?? 4}" style="width:62px;background:#0e2231;border:1px solid #21475f;color:#dfefff;border-radius:4px;padding:3px">
+      </div>
+      <div style="flex:1 1 100%;display:flex;gap:6px;align-items:center">
+        <span style="color:#8fb2cc;font-size:12px;width:52px">调速</span>
+        <input data-pv="${i}" value="${(p.speedVar || '').replace(/"/g, '&quot;')}" placeholder="速度变量（留空=固定速度）"
+               style="flex:1;min-width:120px;background:#0e2231;border:1px solid #21475f;color:#dfefff;border-radius:4px;padding:3px 6px;font-family:Consolas,monospace">
+        <span style="color:#8fb2cc;font-size:12px">满速值</span>
+        <input data-pf="${i}" type="number" step="any" value="${p.speedFull ?? 100}" style="width:70px;background:#0e2231;border:1px solid #21475f;color:#dfefff;border-radius:4px;padding:3px">
+      </div>
+      <div style="flex:1 1 100%;display:flex;gap:6px;align-items:center">
+        <span style="color:#8fb2cc;font-size:12px;width:52px">方向</span>
+        <select data-prv="${i}" style="flex:1;background:#0e2231;border:1px solid #21475f;color:#dfefff;border-radius:4px;padding:3px">
+          <option value="" ${!p.reverse ? 'selected' : ''}>正向（默认）</option>
+          <option value="on" ${p.reverse === 'on' ? 'selected' : ''}>反向</option>
+          <option value="sign" ${p.reverse === 'sign' ? 'selected' : ''}>跟调速变量正负（负值反向）</option>
+        </select>
+        <span style="color:#8fb2cc;font-size:12px">斜坡</span>
+        <input data-prp="${i}" type="number" step="0.1" value="${p.ramp ?? 0.7}" style="width:60px;background:#0e2231;border:1px solid #21475f;color:#dfefff;border-radius:4px;padding:3px">
+      </div>
+      <div style="flex:1 1 100%;display:flex;gap:6px;align-items:center">
+        <span style="color:#8fb2cc;font-size:12px;width:52px">粒子数</span>
+        <input data-pcnt="${i}" type="number" min="1" max="32" step="1" value="${p.count ?? 3}" style="width:56px;background:#0e2231;border:1px solid #21475f;color:#dfefff;border-radius:4px;padding:3px">
+        <span style="color:#8fb2cc;font-size:12px">长度(米)</span>
+        <input data-pcore="${i}" type="number" min="0.2" step="0.2" value="${p.core ?? 2}" style="width:64px;background:#0e2231;border:1px solid #21475f;color:#dfefff;border-radius:4px;padding:3px">
+        <span style="color:#8fb2cc;font-size:12px">拖尾(米)</span>
+        <input data-ptail="${i}" type="number" min="0" step="0.5" value="${p.tail ?? 6}" style="width:64px;background:#0e2231;border:1px solid #21475f;color:#dfefff;border-radius:4px;padding:3px">
+      </div>
+      <div style="flex:1 1 100%;color:#7f97ab;font-size:11px">
+        长度=粒子本体满亮段；拖尾=本体后面渐隐的长度；整条线上均匀排 N 个粒子，从一头扫到另一头
+      </div>
+    </div>`).join('');
+
+  /* ---- 管线模板 ---- */
+  const PIPE_TPL_FIELDS = ['color','mode','speed','gap','r','count','core','tail','ramp','speedFull','reverse'];
+  function recordPipeTpl(i) {
+    const p = PIPES[i]; if (!p) return;
+    const nm = prompt('模板名称（只保存颜色/速度/粒子等外观参数，不含设备与条件）',
+      (p.name || ('管线 ' + (i + 1))) + ' 模板');
+    if (nm === null) return;
+    const name = (nm || '').trim() || ((p.name || '管线') + ' 模板');
+    const tpl = { name: name, at: Date.now() };
+    PIPE_TPL_FIELDS.forEach(f => { if (p[f] !== undefined) tpl[f] = p[f]; });
+    PIPE_TPLS.push(tpl);
+    renderPipes();
+    setStatus('已存为模板「' + name + '」（点上方「保存」或顶栏「保存」写回项目）');
+  }
+  function applyPipeTpl(i, k) {
+    const p = PIPES[i], tpl = PIPE_TPLS[k];
+    if (!p || !tpl) return;
+    PIPE_TPL_FIELDS.forEach(f => { if (tpl[f] !== undefined) p[f] = tpl[f]; });
+    renderPipes();
+    try { rebuildRunner(); } catch (e) {}
+    setStatus('已套用模板「' + (tpl.name || ('模板' + (k + 1))) + '」到「' +
+      (p.name || ('管线 ' + (i + 1))) + '」，点这张卡片的「保存」落盘');
+  }
+  box.querySelectorAll('[data-ptpl]').forEach(el => el.onclick = () => recordPipeTpl(+el.dataset.ptpl));
+  box.querySelectorAll('[data-papt]').forEach(el => el.onchange = () => {
+    const v = el.value; if (v === '') return;
+    el.value = '';
+    applyPipeTpl(+el.dataset.papt, +v);
+  });
+    renderPipeTplSel();
+  box.querySelectorAll('[data-psave]').forEach(el => el.onclick = async () => {
+    const btn = el;
+    btn.disabled = true; btn.textContent = '保存中…';
+    try { await savePipeAt(+btn.dataset.psave); }
+    catch (e) { setStatus('保存失败：' + e.message); }
+    finally { btn.disabled = false; btn.textContent = '保存'; }
+  });
+  box.querySelectorAll('[data-pn]').forEach(el => el.oninput = () => { PIPES[+el.dataset.pn].name = el.value; });
+  box.querySelectorAll('[data-pe]').forEach(el => el.oninput = () => { PIPES[+el.dataset.pe].expr = el.value; });
+  box.querySelectorAll('[data-pm]').forEach(el => el.onchange = () => { PIPES[+el.dataset.pm].mode = el.value; renderPipes(); });
+  box.querySelectorAll('[data-pc]').forEach(el => el.oninput = () => { PIPES[+el.dataset.pc].color = el.value; });
+  box.querySelectorAll('[data-ps]').forEach(el => el.oninput = () => { PIPES[+el.dataset.ps].speed = Number(el.value || 8); });
+  box.querySelectorAll('[data-pg]').forEach(el => el.oninput = () => { PIPES[+el.dataset.pg].gap = Number(el.value || 4); });
+  box.querySelectorAll('[data-pv]').forEach(el => el.oninput = () => { PIPES[+el.dataset.pv].speedVar = el.value.trim(); });
+  box.querySelectorAll('[data-pf]').forEach(el => el.oninput = () => { PIPES[+el.dataset.pf].speedFull = Number(el.value || 100); });
+  box.querySelectorAll('[data-prv]').forEach(el => el.onchange = () => { PIPES[+el.dataset.prv].reverse = el.value; });
+  box.querySelectorAll('[data-prp]').forEach(el => el.oninput = () => { PIPES[+el.dataset.prp].ramp = Number(el.value || 0.7); });
+  box.querySelectorAll('[data-pcnt]').forEach(el => el.oninput = () => { PIPES[+el.dataset.pcnt].count = Math.max(1, Math.min(32, Number(el.value || 3))); });
+  box.querySelectorAll('[data-pcore]').forEach(el => el.oninput = () => { PIPES[+el.dataset.pcore].core = Math.max(0.2, Number(el.value || 2)); });
+  box.querySelectorAll('[data-ptail]').forEach(el => el.oninput = () => { PIPES[+el.dataset.ptail].tail = Math.max(0, Number(el.value || 6)); });
+  try { bindPipeTests(); } catch (e) {}
+  box.querySelectorAll('[data-pdel]').forEach(el => el.onclick = () => {
+    const i = +el.dataset.pdel;
+    if (!confirm('删除管线「' + (PIPES[i].name || '') + '」？')) return;
+    PIPES.splice(i, 1); renderPipes();
+  });
+}
+
+$('btnMakePipe').onclick = () => {
+  const objs = Array.from(MULTI);
+  if (!objs.length) { alert('先在左边按住 Ctrl 点选管子的分段'); return; }
+  const name = prompt('管线名称：', '管线 ' + (PIPES.length + 1));
+  if (name === null) return;
+  PIPES.push({
+    id: 'p' + Date.now(), name: name || ('管线 ' + (PIPES.length + 1)),
+    objs: objs, mode: 'flow', expr: '', color: '#19ffd8', speed: 8, gap: 4, r: 0.28
+  });
+  MULTI.clear();
+  renderObjList(); renderPipes();
+  $('status').textContent = '已建管线（记得点保存）';
+};
+
+$('btnClearMulti').onclick = () => { MULTI.clear(); renderObjList(); renderMulti(); };
+
+
+/* 测试按钮 */
+function bindPipeTests() {
+  const box = $('listPipe');
+  if (!box) return;
+  box.querySelectorAll('[data-ptest]').forEach(el => el.onclick = () => {
+    const i = +el.dataset.ptest;
+    const p = PIPES[i];
+    if (!p || !PIPE_RUNNER) { alert('模型还没加载完'); return; }
+    const on = !PIPE_RUNNER.isForced(p.id);
+    PIPE_RUNNER.setForce(p.id, on);
+    el.style.background = on ? '#1f7a5c' : '#17503f';
+    el.textContent = on ? '停止' : '测试';
+    PIPE_RUNNER.apply(PIPE_VALUES);
+    requestRender();
+    $('status').textContent = on ? ('测试中：' + (p.name || '')) : '已停止测试';
+  });
+}
+$('btnTestAll').onclick = () => {
+  if (!PIPE_RUNNER) { alert('模型还没加载完'); return; }
+  const anyForced = PIPES.some(p => PIPE_RUNNER.isForced(p.id));
+  PIPES.forEach(p => PIPE_RUNNER.setForce(p.id, !anyForced));
+  PIPE_RUNNER.apply(PIPE_VALUES);
+  requestRender();
+  $('btnTestAll').textContent = anyForced ? '▶ 全部管线跑一遍（测试）' : '■ 停止全部测试';
+  renderPipes();
+  $('status').textContent = anyForced ? '已停止全部测试' : '全部管线测试中（不看条件）';
+};
+
+/* 管道页签可见时，拉实时值做真预览 */
+let PIPE_VALUES = {};
+async function pipePoll() {
+  const paneOn = document.getElementById('pane-pipe') && document.getElementById('pane-pipe').classList.contains('on');
+  if (paneOn && PIPE_RUNNER && PIPES.length) {
+    try {
+      const extra = new Set();
+      PIPES.forEach(p => {
+        exprTags(p.expr).forEach(t => extra.add(t));
+        if (p.speedVar) extra.add(p.speedVar);
+      });
+      const q = extra.size ? ('&extra=' + encodeURIComponent(Array.from(extra).join(','))) : '';
+      const d = await fetch('/api/live?t=' + Date.now() + q, { cache: 'no-store' }).then(r => r.json());
+      PIPE_VALUES = (d && d.values) || {};
+      if (PIPE_RUNNER.apply(PIPE_VALUES)) requestRender();
+    } catch (e) {}
+  }
+  setTimeout(pipePoll, 1500);
+}
+setTimeout(pipePoll, 1200);
+
+/* ---------------- 选中对象已有的绑定 ---------------- */
+const TYPENAME = { color: '颜色', level: '缩放', rot: '角度', spin: '旋转', state: '状态规则', grad: '渐变' };
+
+/* ---------------- 规则复用（模板） ---------------- */
+let RULE_TEMPLATE = null;
+let PANEL_TPLS = [];
+let PIPE_TPLS = [];
+
+/* 把变量名里的"源设备名"换成"目标设备名" */
+function rewriteTag(tag, fromObj, toObj) {
+  if (!tag) return tag;
+  if (fromObj && toObj && fromObj !== toObj && tag.indexOf(fromObj) >= 0) {
+    return tag.split(fromObj).join(toObj);
+  }
+  return tag;
+}
+
+function cloneBindingWithRewrite(b, fromObj, toObj) {
+  const c = JSON.parse(JSON.stringify(b));
+  c.obj = toObj;
+  if (c.tag) c.tag = rewriteTag(c.tag, fromObj, toObj);
+  if (c.gate) c.gate = rewriteTag(c.gate, fromObj, toObj);
+  if (c.rules) c.rules.forEach(r => { r.tag = rewriteTag(r.tag, fromObj, toObj); });
+  return c;
+}
+
+function setTemplate(b) {
+  RULE_TEMPLATE = JSON.parse(JSON.stringify(b));
+  renderTplBar();
+  $('status').textContent = '已设为模板：选中目标设备后点「套用到当前对象」';
+}
+
+function renderTplBar() {
+  const bar = $('tplBar');
+  if (!bar) return;
+  if (!RULE_TEMPLATE) { bar.style.display = 'none'; return; }
+  bar.style.display = 'block';
+  const n = (RULE_TEMPLATE.rules || []).length;
+  $('tplName').textContent = (TYPENAME[RULE_TEMPLATE.type] || RULE_TEMPLATE.type)
+    + '（' + (n ? n + ' 条规则' : (RULE_TEMPLATE.tag || '')) + '，来自 ' + (RULE_TEMPLATE.obj || '?') + '）';
+  const multi = MULTI.size;
+  const bm = $('btnTplMulti');
+  if (multi) { bm.style.display = 'block'; bm.textContent = '套用到所选 ' + multi + ' 个'; }
+  else { bm.style.display = 'none'; }
+}
+
+function applyTemplateTo(objs) {
+  if (!RULE_TEMPLATE || !objs.length) return 0;
+  let n = 0;
+  objs.forEach(t => {
+    const nb = cloneBindingWithRewrite(RULE_TEMPLATE, RULE_TEMPLATE.obj, t);
+    const i = BINDINGS.findIndex(b => b.obj === nb.obj && b.type === nb.type);
+    if (i >= 0) BINDINGS[i] = nb; else BINDINGS.push(nb);
+    n++;
+  });
+  renderAll(); renderSelBinds();
+  $('status').textContent = '已套用到 ' + n + ' 个对象（记得点保存）';
+  return n;
+}
+
+$('btnTplApply').onclick = () => {
+  if (!selObj) { alert('先选一个目标对象'); return; }
+  applyTemplateTo([selObj]);
+};
+$('btnTplMulti').onclick = () => {
+  const objs = Array.from(MULTI);
+  if (!objs.length) { alert('先在左边 Ctrl 多选对象'); return; }
+  applyTemplateTo(objs);
+};
+$('btnTplClear').onclick = () => { RULE_TEMPLATE = null; renderTplBar(); };
+
+const AXNAME = { y: 'Y轴', x: 'X轴', z: 'Z轴' };
+// 取设备主体名，如 Demo_SN1_YX1 -> Demo_SN1 ；SomeDevice_1 之类返回空
+function devStem(name) {
+  if (!name) return '';
+  const m = String(name).match(/^(.+?数据_[A-Za-z]+\d+)/);
+  return m ? m[1] : '';
+}
+function checkDev(objName, tagName, label, boxId) {
+  const box = $(boxId);
+  if (!box) return;
+  const a = devStem(objName), b = devStem(tagName);
+  if (a && b && a !== b) {
+    box.style.display = 'block';
+    box.textContent = '⚠ ' + label + '属于 ' + b + '，与本对象 ' + a + ' 不是同一台设备，确认是否绑错';
+  } else {
+    box.style.display = 'none';
+  }
+}
+function axTxt(b) { return AXNAME[b.axis || 'y'] || 'Y轴'; }
+function dirTxt(b) { return Number(b.dir || 1) < 0 ? '逆时针' : '顺时针'; }
+
+function bindBrief(b) {
+  if (b.type === 'state') {
+    const n = (b.rules || []).length;
+    return n ? (n + ' 条规则：' + (b.rules || []).map(r =>
+      (r.mode === 'range' ? `${fmtNum(r.min)}~${fmtNum(r.max, '∞')}` : '=' + (r.eq ?? 1))
+    ).join(' / ')) : '（空规则）';
+  }
+  if (b.type === 'color') return `${b.tag || ''} ∈ [${fmtNum(b.min, 0)}, ${fmtNum(b.max, 1)}]`;
+  if (b.type === 'level') return `${b.tag || ''} ∈ [${fmtNum(b.min, 0)}, ${fmtNum(b.max, 100)}]`;
+  if (b.type === 'rot') return `${b.tag || ''} × ${b.factor ?? 1} · ${axTxt(b)} ${dirTxt(b)}`;
+  if (b.type === 'spin') return `${b.tag || ''}，最大 ${b.speed ?? 1.5} · ${axTxt(b)} ${dirTxt(b)}${b.gate ? '，启停 ' + b.gate : ''}`;
+  return b.tag || '';
+}
+
+function bindSummary(b) {
+  if (b.type === 'state') {
+    const rs = (b.rules || []).map(r => {
+      const cond = ((r.mode === 'range')
+        ? `${fmtNum(r.min)}~${fmtNum(r.max, '∞')}`
+        : `= ${r.eq ?? 1}`) + (r.blink ? ' 闪' : '');
+      return `<div style="display:flex;align-items:center;gap:6px;margin:2px 0">
+        <span style="width:10px;height:10px;border-radius:2px;background:${r.color || '#ff2d2d'};display:inline-block"></span>
+        <span class="mono" style="font-size:11px">${r.tag || '(空)'}</span>
+        <span class="muted" style="font-size:11px">${cond}</span></div>`;
+    }).join('');
+    return rs || '<div class="muted">（还没有规则）</div>';
+  }
+  if (b.type === 'color') return `<div class="mono" style="font-size:11px">${b.tag || ''} ∈ [${fmtNum(b.min, 0)}, ${fmtNum(b.max, 1)}]</div>`;
+  if (b.type === 'level') return `<div class="mono" style="font-size:11px">${b.tag || ''} ∈ [${fmtNum(b.min, 0)}, ${fmtNum(b.max, 100)}] → 纵向缩放</div>`;
+  if (b.type === 'rot') return `<div class="mono" style="font-size:11px">${b.tag || ''} × ${b.factor ?? 1} → 绕 ${axTxt(b)} ${dirTxt(b)} 旋转</div>`;
+  if (b.type === 'spin') return `<div class="mono" style="font-size:11px">${b.tag || ''} 调速，最大 ${b.speed ?? 1.5}${Number(b.dir || 1) < 0 ? '，反转' : ''}${b.gate ? '，启停 ' + b.gate : ''}</div>`;
+  if (b.type === 'grad') {
+    const c0 = b.c0 || '#ff2d2d', c1 = b.c1 || '#22c55e';
+    return `<div class="mono" style="font-size:11px">${b.tag || ''} ∈ [${fmtNum(b.min, 0)}, ${fmtNum(b.max, 100)}] →
+      <span style="display:inline-block;width:58px;height:9px;border-radius:3px;vertical-align:-1px;
+        background:linear-gradient(90deg,${c0},${c1})"></span> ${c0} → ${c1}</div>`;
+  }
+  return '';
+}
+
+function fmtNum(v, dflt) {
+  if (v === undefined || v === null || v === '') return (dflt === undefined ? '?' : String(dflt));
+  return String(v);
+}
+
+function renderSelBinds() {
+  const box = $('selBinds');
+  if (!box) return;
+  const list = BINDINGS.filter(b => b.obj === selObj);
+  $('selBindsCnt').textContent = selObj ? ('（共 ' + list.length + '）') : '';
+  if (!selObj) { box.innerHTML = '<div class="muted">选中对象后显示它已经配好的绑定</div>'; return; }
+  if (!list.length) { box.innerHTML = '<div class="muted">这个对象还没有绑定，配好后点「加到绑定」</div>'; return; }
+  box.innerHTML = list.map((b, i) => {
+    const gi = BINDINGS.indexOf(b);
+    return `<div class="card" style="padding:8px;margin-bottom:6px">
+      <div class="row" style="margin:0 0 4px 0">
+        <b style="color:#7fd7ff">${TYPENAME[b.type] || b.type}</b>
+        <span style="margin-left:auto"></span>
+        <button class="sm" data-btpl="${gi}">设为模板</button>
+        <button class="sm" data-bload="${gi}" style="margin-left:4px">载入编辑</button>
+        <button class="sm danger" data-bdel="${gi}" style="margin-left:4px">删</button>
+      </div>
+      ${bindSummary(b)}
+    </div>`;
+  }).join('');
+  box.querySelectorAll('[data-btpl]').forEach(el => {
+    el.onclick = () => { setTemplate(BINDINGS[+el.dataset.btpl]); };
+  });
+  box.querySelectorAll('[data-bload]').forEach(el => {
+    el.onclick = () => { loadBindIntoForm(BINDINGS[+el.dataset.bload]); };
+  });
+  box.querySelectorAll('[data-bdel]').forEach(el => {
+    el.onclick = () => {
+      if (!confirm('删除这条绑定？')) return;
+      BINDINGS.splice(+el.dataset.bdel, 1);
+      renderAll(); renderSelBinds();
+      $('status').textContent = '已删除（记得点保存）';
+    };
+  });
+}
+
+function loadBindIntoForm(b) {
+  if (!b) return;
+  _bindEditIdx = BINDINGS.indexOf(b);
+  $('bObj').value = b.obj || '';
+  $('bType').value = b.type;
+  $('bTag').value = b.tag || '';
+  $('bMin').value = (b.min ?? '');
+  $('bMax').value = (b.max ?? '');
+  $('bFactor').value = b.factor ?? 1;
+  $('bSpeed').value = b.speed ?? 1.5;
+  $('bGate').value = b.gate || '';
+  if ($('bSpinDir')) $('bSpinDir').value = String(Number(b.dir || 1) < 0 ? -1 : 1);
+  if ($('bAxis')) $('bAxis').value = b.axis || 'y';
+  $('bColor').value = b.color || '#ff2d2d';
+  if ($('bC0')) $('bC0').value = b.c0 || '#ff2d2d';
+  if ($('bC1')) $('bC1').value = b.c1 || '#22c55e';
+
+// 渐变端点色变化时刷新预览条
+['bC0', 'bC1'].forEach(id => {
+  const el = $(id);
+  if (el) el.addEventListener('input', () => {
+    const bar = $('gradBar');
+    if (bar) bar.style.background = `linear-gradient(90deg, ${$('bC0').value}, ${$('bC1').value})`;
+  });
+});
+  bRules = JSON.parse(JSON.stringify(b.rules || []));
+  if ($('bBlinkHz')) $('bBlinkHz').value = b.blinkHz ?? 1.5;
+  renderBRules();
+  $('bType').onchange();
+  ['bObj', 'bTag', 'bGate'].forEach(id => {
+    const el = $(id);
+    if (el) el.dispatchEvent(new Event('input'));
+  });
+  $('status').textContent = '已载入到表单，改完点「加到绑定」覆盖';
+}
+
+/* ---------------- 状态规则 ---------------- */
+let bRules = [];
+
+function renderBRules() {
+  $('bRules').innerHTML = bRules.map((r, i) => `
+    <div class="card" style="padding:6px;margin-bottom:6px">
+      <div class="row"><label>变量</label>
+        <input data-rk="tag" data-i="${i}" value="${(r.tag || '').replace(/"/g, '&quot;')}" list="varList" placeholder="如 Demo_SB2KF2_GB1">
+      </div>
+      <div class="row"><label>判断</label>
+        <select data-rk="mode" data-i="${i}" style="max-width:92px">
+          <option value="eq" ${r.mode !== 'range' ? 'selected' : ''}>等于</option>
+          <option value="range" ${r.mode === 'range' ? 'selected' : ''}>区间</option>
+        </select>
+        ${r.mode === 'range' ? `
+          <input data-rk="min" data-i="${i}" type="number" step="any" placeholder="下限" value="${r.min ?? ''}" style="max-width:78px">
+          <span class="muted">~</span>
+          <input data-rk="max" data-i="${i}" type="number" step="any" placeholder="不限" value="${r.max ?? ''}" style="max-width:78px">
+        ` : `
+          <input data-rk="eq" data-i="${i}" type="number" step="any" placeholder="1" value="${r.eq ?? 1}" style="max-width:78px">
+        `}
+        <input data-rk="color" data-i="${i}" type="color" value="${r.color || '#ff2d2d'}" style="max-width:54px;padding:2px">
+        <label style="display:flex;align-items:center;gap:3px;margin-left:4px;font-size:12px;color:#8fb2cc">
+          <input type="checkbox" data-rk="blink" data-i="${i}" ${r.blink ? 'checked' : ''} style="width:auto">闪
+        </label>
+        <button class="sm danger" data-rdel="${i}" style="margin-left:auto">删</button>
+      </div>
+    </div>`).join('');
+  const setRule = (el) => {
+    const i = +el.dataset.i, k = el.dataset.rk;
+    if (k === 'mode') { bRules[i].mode = el.value; renderBRules(); return; }
+    if (k === 'eq' || k === 'min' || k === 'max') {
+      bRules[i][k] = (el.value === '') ? '' : Number(el.value);
+    } else {
+      bRules[i][k] = el.value;
+    }
+  };
+  $('bRules').querySelectorAll('input').forEach(el => { el.oninput = () => setRule(el); });
+  $('bRules').querySelectorAll('select').forEach(el => { el.onchange = () => setRule(el); });
+  $('bRules').querySelectorAll('input[type=checkbox]').forEach(el => {
+    el.onchange = () => { bRules[+el.dataset.i].blink = el.checked; };
+  });
+  $('bRules').querySelectorAll('[data-rdel]').forEach(el => {
+    el.onclick = () => { bRules.splice(+el.dataset.rdel, 1); renderBRules(); };
+  });
+}
+
+$('btnAddRule').onclick = () => {
+  bRules.push({ tag: $('bTag').value.trim(), mode: 'eq', eq: 1, color: '#ff2d2d' });
+  renderBRules();
+};
+
+/* ---------------- 绑定 ---------------- */
+function bindRec() {
+  const t = $('bType').value;
+  const _o = ($('bObj').value || '').trim() || selObj;
+  const r = { obj: _o, type: t, tag: $('bTag').value.trim() };
+  if ($('bMin').value !== '') r.min = Number($('bMin').value);
+  if ($('bMax').value !== '') r.max = Number($('bMax').value);
+  if (t === 'rot') {
+    r.factor = Number($('bFactor').value || 1);
+    if ($('bSpinDir')) r.dir = Number($('bSpinDir').value) < 0 ? -1 : 1;
+    if ($('bAxis')) r.axis = $('bAxis').value || 'y';
+  }
+  if (t === 'spin') {
+    r.speed = Number($('bSpeed').value || 1.5);
+    if ($('bGate').value.trim()) r.gate = $('bGate').value.trim();
+    if ($('bSpinDir')) r.dir = Number($('bSpinDir').value) < 0 ? -1 : 1;
+    if ($('bAxis')) r.axis = $('bAxis').value || 'y';
+  }
+  if (t === 'color') r.color = $('bColor').value;
+  if (t === 'grad') {
+    r.c0 = $('bC0').value || '#ff2d2d';
+    r.c1 = $('bC1').value || '#22c55e';
+    if (r.min === undefined) r.min = 0;
+    if (r.max === undefined) r.max = 100;
+  }
+  if (t === 'state') {
+    r.rules = bRules.filter(x => x.tag).map(x => {
+      const o = { tag: x.tag, color: x.color || '#ff2d2d' };
+      if (x.blink) o.blink = true;
+      if (x.mode === 'range') {
+        o.mode = 'range';
+        if (x.min !== '' && x.min !== undefined && x.min !== null) o.min = Number(x.min);
+        if (x.max !== '' && x.max !== undefined && x.max !== null) o.max = Number(x.max);
+      } else {
+        o.eq = Number(x.eq ?? 1);
+      }
+      return o;
+    });
+    r.blinkHz = Number($('bBlinkHz').value || 1.5);
+    delete r.tag; delete r.min; delete r.max;
+  }
+  return r;
+}
+
+$('btnAddBind').onclick = () => {
+  if (!(($('bObj').value || '').trim() || selObj)) { alert('先在左边或 3D 里选一个对象'); return; }
+  const r = bindRec();
+  if (!r.obj) { alert('对象名为空'); return; }
+  if (!$('bObj').value) $('bObj').value = r.obj;
+  if (r.type === 'state') {
+    if (!r.rules || !r.rules.length) { alert('至少加一条状态规则'); return; }
+  } else if (!r.tag) { alert('填变量名'); return; }
+  const i = BINDINGS.findIndex(b => b.obj === r.obj && b.type === r.type);
+  if (i >= 0) BINDINGS[i] = r; else BINDINGS.push(r);
+  renderAll();
+  renderSelBinds();
+  $('status').textContent = '已加入绑定（记得点保存）';
+};
+
+/* ---------------- 展板 ---------------- */
+let pRows = [];
+/* ================= 展板预览与拖动 ================= */
+function devPanelRec() {
+  const obj = (($('pObj') && $('pObj').value) || selObj || '').trim();
+  const v = (id) => (($(id) && $(id).value) || '').trim();
+  const num = (id) => { const t = v(id); return t === '' ? null : Number(t); };
+  return {
+    obj,
+    title: v('pTitle') || obj,
+    w: num('pW'), fs: num('pFs'),
+    fixed: $('pFixed') ? $('pFixed').checked : false,
+    pos: [num('pX'), num('pY'), num('pZ')],
+    items: pRows.map(r => ({ label: r.label, tag: r.tag, unit: r.unit }))
+  };
+}
+
+function paneIs(p) {
+  const el = document.getElementById('pane-' + p);
+  return !!(el && el.classList.contains('on'));
+}
+
+function devPanelWorldPos(rec) {
+  if (rec.fixed && rec.pos && rec.pos.every(n => Number.isFinite(n))) {
+    return new THREE.Vector3(rec.pos[0], rec.pos[1], rec.pos[2]);
+  }
+  const t = rec.obj ? findObj(rec.obj) : null;
+  if (!t) return null;
+  const b = new THREE.Box3().setFromObject(t);
+  return new THREE.Vector3((b.min.x + b.max.x) / 2, b.max.y + 0.6, (b.min.z + b.max.z) / 2);
+}
+
+function hideDevPanel() {
+  if (DEV_PANEL) {
+    if (DEV_PANEL.parent) DEV_PANEL.parent.remove(DEV_PANEL);
+    if (DEV_EL && DEV_EL.parentElement) DEV_EL.remove();   // CSS2D 不会自己删 DOM
+    DEV_PANEL = null;
+  }
+  if (DEV_EL) {
+    DEV_EL.removeEventListener('pointerdown', onDevPanelDown);
+    DEV_EL = null;
+  }
+}
+
+/* ---------- 全部展板只读预览 ---------- */
+let PREVIEW_ALL = false;
+let _prevObjs = [];
+let _prevVals = {};
+
+function clearAllPreviews() {
+  _prevObjs.forEach(o => {
+    if (o.parent) o.parent.remove(o);
+    if (o.element && o.element.remove) o.element.remove();   // 同时删 DOM
+  });
+  _prevObjs = [];
+}
+
+function _fmtVal(v, it) {
+  if (v === undefined || v === null || v === '') return '—';
+  let n = Number(v);
+  let txt;
+  if (!Number.isFinite(n)) txt = String(v);
+  else {
+    const dec = (it.dec === 0 || it.dec) ? Number(it.dec) : null;
+    txt = dec === null ? String(n) : n.toFixed(dec);
+    if (it.thou) {
+      const parts = txt.split('.');
+      parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+      txt = parts.join('.');
+    }
+  }
+  return txt + (it.unit ? (' ' + it.unit) : '');
+}
+
+/* 预览展板点击 → 打开对应展板的编辑表单（事件委托，装一次就够） */
+function _installPrevClick() {
+  if (window._prevClickInstalled || !labelRenderer) return;
+  window._prevClickInstalled = true;
+  const host = labelRenderer.domElement;
+  host.style.pointerEvents = 'none';        /* 只让 .pnl 自己接收事件 */
+  host.addEventListener('click', (ev) => {
+    let t = ev.target;
+    while (t && t !== host && !(t.dataset && t.dataset.prevPanel !== undefined)) t = t.parentElement;
+    if (!t || t === host) return;
+    const idx = Number(t.dataset.prevPanel);
+    if (!Number.isFinite(idx)) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const b = $('listPanel') && $('listPanel').querySelector('[data-ep="' + idx + '"]');
+    if (b) b.click();
+    switchPane('panel');
+    setStatus('已载入「' + ((PANELS[idx] && PANELS[idx].title) || '') + '」到右侧表单');
+  }, true);
+}
+
+async function renderAllPreviews() {
+  clearAllPreviews();
+  if (!PREVIEW_ALL) { requestRender(); return; }
+  try { _prevVals = (await (await fetch('/api/live')).json()).values || {}; } catch (e) { _prevVals = {}; }
+  PANELS.forEach((p, idx) => {
+    const wp = devPanelWorldPos({
+      fixed: !!p.fixed,
+      pos: p.pos,
+      obj: p.obj
+    });
+    if (!wp) return;
+    const el = document.createElement('div');
+    el.className = 'pnl prev';
+    if (Number(p.w) > 0) { el.style.width = Number(p.w) + 'px'; el.classList.add('weed'); }
+    if (Number(p.fs) > 0) el.style.fontSize = Number(p.fs) + 'px';
+    el.innerHTML = '<h4>' + (p.title || p.obj || '（未命名）') + '</h4>' +
+      (p.items || []).map(it => '<div class="r"><span class="k">' + (it.label || it.tag || '') +
+        '</span><span class="v">' + _fmtVal(_prevVals[it.tag], it) + '</span></div>').join('');
+    el.title = '点击编辑这块展板：' + (p.title || '');
+    el.style.cursor = 'pointer';
+    el.style.pointerEvents = 'auto';        /* .pnl 默认 pointer-events:none */
+    el.dataset.prevPanel = String(idx);
+    const co = new CSS2DObject(el);
+    co.position.copy(wp);
+    co.center.set(0.5, 1.0);
+    scene.add(co);
+    _prevObjs.push(co);
+    /* 不可见 Sprite 代理：方便在 3D 里点中这块展板 */
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+      transparent: true, opacity: 0, depthTest: false, depthWrite: false
+    }));
+    sp.position.copy(wp);
+    sp.scale.set(3.2, 2.0, 1);
+    sp.userData.prevIdx = idx;
+    scene.add(sp);
+    _prevObjs.push(sp);
+  });
+  _installPrevClick();
+  setStatus(PREVIEW_ALL ? ('预览中：' + _prevObjs.length + ' 块展板（点任意展板即可载入编辑）') : '');
+  requestRender();
+}
+
+function renderDevPanel() {
+  hideDevPanel();
+  if (PREVIEW_ALL) { PREVIEW_ALL = false; clearAllPreviews(); const _b = $('btnPrevAll'); if (_b) { _b.textContent = '预览全部展板'; _b.style.background = ''; _b.style.borderColor = ''; } }
+  if (!paneIs('panel')) return;
+  const rec = devPanelRec();
+  const wp = devPanelWorldPos(rec);
+  if (!wp) return;
+
+  const el = document.createElement('div');
+  el.className = 'pnl dev';
+  if (rec.w > 0) { el.style.width = rec.w + 'px'; el.classList.add('weed'); }
+  if (rec.fs > 0) el.style.fontSize = rec.fs + 'px';
+  el.innerHTML = '<h4>' + (rec.title || '（未命名）') + '</h4>' +
+    rec.items.map(it => '<div class="r"><span class="k">' + (it.label || it.tag || '') + '</span>' +
+      '<span class="v">—' + (it.unit ? (' ' + it.unit) : '') + '</span></div>').join('') +
+    '<div class="devhint">拖动=平面 · Shift=上下 · Alt=前后 · Ctrl=0.1m</div>';
+  el.style.pointerEvents = 'auto';
+  el.style.cursor = 'move';
+  el.addEventListener('pointerdown', onDevPanelDown);
+
+  const co = new CSS2DObject(el);
+  co.position.copy(wp);
+  co.center.set(0.5, 1.0);
+  scene.add(co);
+  DEV_PANEL = co; DEV_EL = el;
+  requestRender();
+}
+
+let _drag = null;
+
+function onDevPanelDown(ev) {
+  if (!DEV_PANEL) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  controls.enabled = false;
+  _drag = {
+    x0: ev.clientX, y0: ev.clientY,
+    p0: DEV_PANEL.position.clone(),
+    mode: ev.shiftKey ? 'y' : (ev.altKey ? 'depth' : DEV_DRAGMODE)
+  };
+  window.addEventListener('pointermove', onDevPanelMove);
+  window.addEventListener('pointerup', onDevPanelUp, { once: true });
+}
+
+function _camBasis() {
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+  const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+  const fwd = new THREE.Vector3();
+  camera.getWorldDirection(fwd);
+  const dist = camera.position.distanceTo(_drag ? _drag.p0 : camera.position);
+  const worldPerPx = 2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) /
+    Math.max(1, stage.clientHeight);
+  return { right, up, fwd, worldPerPx };
+}
+
+function onDevPanelMove(ev) {
+  if (!_drag || !DEV_PANEL) return;
+  const { right, up, fwd, worldPerPx } = _camBasis();
+  const dx = (ev.clientX - _drag.x0) * worldPerPx;
+  const dy = (ev.clientY - _drag.y0) * worldPerPx;
+  const p = _drag.p0.clone();
+  const mode = ev.shiftKey ? 'y' : (ev.altKey ? 'depth' : _drag.mode);
+  if (mode === 'y') p.y += -dy;
+  else if (mode === 'depth') p.addScaledVector(fwd, -dy);
+  else {
+    p.addScaledVector(right, dx);
+    p.addScaledVector(up, -dy);
+  }
+  /* Ctrl：吸附到绝对 0.1 m 网格 */
+  if (ev.ctrlKey) {
+    p.x = Math.round(p.x * 10) / 10;
+    p.y = Math.round(p.y * 10) / 10;
+    p.z = Math.round(p.z * 10) / 10;
+  }
+  /* 与其它展板对齐：X / Y / Z 各自吸附（阈值 0.2 m），并画辅助线 */
+  const guides = [];
+  let _cur = null;
+  try { _cur = devPanelRec(); } catch (e) { _cur = null; }
+  const others = PANELS.filter(o => o !== _cur && o.fixed && Array.isArray(o.pos) && o.pos.length === 3);
+  ['x', 'y', 'z'].forEach(ax => {
+    let bestV = null, bestD = 0.2;
+    for (const o of others) {
+      const v = Number(o.pos[{ x: 0, y: 1, z: 2 }[ax]]);
+      if (!Number.isFinite(v)) continue;
+      const d = Math.abs(p[ax] - v);
+      if (d < bestD) { bestD = d; bestV = v; }
+    }
+    if (bestV !== null && bestD > 1e-4) {   // 差 0 就不用动，也不画线
+      p[ax] = bestV;
+      guides.push({ ax, v: bestV });
+    }
+  });
+  showGuides(guides, mode === 'depth');
+  DEV_PANEL.position.copy(p);
+  devPanelWritePos(p);
+  requestRender();
+}
+
+/* ---------- 对齐辅助线（HTML 覆盖层） ---------- */
+let _guideEls = [];
+function _ensureGuideLayer() {
+  if ($('guideLayer')) return $('guideLayer');
+  const d = document.createElement('div');
+  d.id = 'guideLayer';
+  d.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:5;overflow:hidden';
+  stage.appendChild(d);
+  return d;
+}
+function showGuides(list, skip) {
+  const layer = _ensureGuideLayer();
+  _guideEls.forEach(e => e.remove());
+  _guideEls = [];
+  if (skip || !list.length) return;
+  const rect = stage.getBoundingClientRect();
+  const v = new THREE.Vector3();
+  const toPx = (p3) => {
+    v.copy(p3).project(camera);
+    return { x: (v.x * 0.5 + 0.5) * rect.width, y: (-v.y * 0.5 + 0.5) * rect.height };
+  };
+  list.forEach(g => {
+    const a = DEV_PANEL.position.clone(); a[g.ax] = g.v;
+    const e = document.createElement('div');
+    if (g.ax === 'y') {
+      const q = toPx(a);
+      e.style.cssText = 'position:absolute;left:0;right:0;top:' + q.y.toFixed(1) +
+        'px;border-top:1px dashed rgba(120,220,255,.85)';
+    } else {
+      const q = toPx(a);
+      e.style.cssText = 'position:absolute;top:0;bottom:0;left:' + q.x.toFixed(1) +
+        'px;border-left:1px dashed rgba(120,220,255,.85)';
+    }
+    layer.appendChild(e);
+    _guideEls.push(e);
+  });
+}
+function clearGuides() { _guideEls.forEach(e => e.remove()); _guideEls = []; }
+
+function onDevPanelUp() {
+  window.removeEventListener('pointermove', onDevPanelMove);
+  controls.enabled = true;
+  clearGuides();
+  _drag = null;
+  /* 松手吸附：离某个设备包围盒顶面中心很近（<0.5 m）就贴上去 */
+  let snapped = null;
+  if (DEV_PANEL) {
+    const p = DEV_PANEL.position;
+    let best = 0.5;
+    Object.keys(OBJMAP).forEach(k => {
+      const o = OBJMAP[k];
+      if (!o || !o.isObject3D || k === DEV_PANEL.userData._pobj) return;
+      const b = new THREE.Box3().setFromObject(o);
+      if (!isFinite(b.min.y)) return;
+      const c = new THREE.Vector3((b.min.x + b.max.x) / 2, b.max.y + 0.05, (b.min.z + b.max.z) / 2);
+      const d = c.distanceTo(p);
+      if (d < best) { best = d; snapped = { name: k, c }; }
+    });
+    if (snapped) {
+      DEV_PANEL.position.copy(snapped.c);
+      devPanelWritePos(snapped.c);
+      requestRender();
+    }
+  }
+  setStatus(snapped
+    ? ('已吸附到「' + snapped.name + '」顶部（点「保存展板」→ 顶栏「保存」）')
+    : '展板位置已更新（点「保存展板」→ 顶栏「保存」）');
+}
+
+function devPanelWritePos(p) {
+  if ($('pX')) $('pX').value = p.x.toFixed(3);
+  if ($('pY')) $('pY').value = p.y.toFixed(3);
+  if ($('pZ')) $('pZ').value = p.z.toFixed(3);
+  if ($('pFixed') && !$('pFixed').checked) $('pFixed').checked = true;
+}
+
+function renderPRows() {
+  $('pRows').innerHTML = pRows.map((r, i) => `
+    <div class="card" style="padding:6px">
+      <div class="row"><label>标签</label><input data-k="label" data-i="${i}" value="${r.label || ''}"></div>
+      <div class="row"><label>变量</label><input data-k="tag" data-i="${i}" value="${r.tag || ''}" list="varList"></div>
+      <div class="row"><label>单位</label><input data-k="unit" data-i="${i}" value="${r.unit || ''}"></div>
+      <div class="row"><label>小数</label>
+        <input type="number" min="0" max="6" data-k="dec" data-i="${i}" value="${(r.dec === 0 || r.dec) ? r.dec : ''}" placeholder="留空=原样" style="max-width:120px">
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#8fb2cc;flex:1">
+          <input type="checkbox" data-thou="${i}" ${r.thou ? 'checked' : ''} style="width:auto">千分位
+        </label>
+      </div>
+      <div class="row"><label>允许写入</label>
+        <input type="checkbox" data-rw="${i}" ${r.rw ? 'checked' : ''} style="width:auto">
+        <span class="muted">勾选后运行画面才能双击改这个值</span>
+      </div>
+      <button class="sm danger" data-del="${i}">删除该行</button>
+    </div>`).join('');
+  $('pRows').querySelectorAll('input').forEach(el => {
+    el.oninput = () => {
+      const k = el.dataset.k;
+      pRows[+el.dataset.i][k] = (k === 'dec') ? (el.value === '' ? '' : Number(el.value)) : el.value;
+    };
+  });
+  $('pRows').querySelectorAll('[data-rw]').forEach(el => {
+    el.onchange = () => { pRows[+el.dataset.rw].rw = el.checked; };
+  });
+  $('pRows').querySelectorAll('[data-thou]').forEach(el => {
+    el.onchange = () => { pRows[+el.dataset.thou].thou = el.checked; };
+  });
+  $('pRows').querySelectorAll('[data-del]').forEach(el => {
+    el.onclick = () => { pRows.splice(+el.dataset.del, 1); renderPRows(); };
+  });
+  renderDevPanel();
+}
+$('btnAddRow').onclick = () => { pRows.push({ label: '', tag: '', unit: '', rw: false }); renderPRows(); };
+
+$('btnPickPos').onclick = () => {
+  pickPosMode = !pickPosMode;
+  renderer.domElement.style.cursor = pickPosMode ? 'crosshair' : '';
+  $('btnPickPos').textContent = pickPosMode ? '取点中…点 3D' : '在 3D 里点一下定位置';
+  $('pickHint').textContent = pickPosMode ? '现在去中间 3D 画面点一下' : '已取消';
+};
+
+$('btnAddPanel').onclick = async () => {
+  const _objFromForm = (($('pObj') && $('pObj').value) || '').trim();
+  const _obj = _objFromForm || selObj || '';
+  if (!_obj) { alert('先填「对象」或在左边对象树里选一个对象'); return; }
+  let fixed = $('pFixed').checked;
+  let pos = null;
+  if (fixed) {
+    const raw = ['pX', 'pY', 'pZ'].map(id => $(id) ? $(id).value.trim() : '');
+    if (raw.some(v => v === '')) {
+      alert('勾了「固定位置」但坐标没填全。\n要么点「在 3D 里点一下定位置」取点，要么取消勾选（跟随对象）。');
+      return;
+    }
+    pos = raw.map(Number);
+    if (!pos.every(Number.isFinite)) { alert('坐标不是有效数字'); return; }
+    const dup = PANELS.find(x => x.fixed && Array.isArray(x.pos) &&
+      Math.abs(Number(x.pos[0]) - pos[0]) < 0.02 &&
+      Math.abs(Number(x.pos[1]) - pos[1]) < 0.02 &&
+      Math.abs(Number(x.pos[2]) - pos[2]) < 0.02 && x.obj !== _obj);
+    if (dup) {
+      if (!confirm('这个坐标和展板「' + (dup.title || dup.obj) + '」完全一样，两块会叠在一起。\n\n点「确定」= 改为跟随对象；点「取消」= 回去重新取点。')) return;
+      fixed = false; pos = null;
+    }
+  }
+  const vHide = (($('pVHide') && $('pVHide').value) || '').trim();
+  const rec = {
+    obj: _obj,
+    title: $('pTitle').value.trim() || _obj,
+    w: Number(($('pW') && $('pW').value) || 0),
+    fs: Number(($('pFs') && $('pFs').value) || 0),
+    items: pRows.filter(r => r.tag || r.label),
+    fixed: fixed,
+    pos: pos,
+    vHide: vHide
+  };
+  if (!rec.items.length) { alert('至少填一行'); return; }
+  const i = PANELS.findIndex(p => p.obj === rec.obj);
+  if (i >= 0) PANELS[i] = rec; else PANELS.push(rec);
+  renderAll();
+  setStatus('已保存展板「' + rec.title + '」，正在写回项目…');
+  const r = await persistProject();
+  if (!r || r.ok === false) { alert('写回项目失败：' + ((r && r.error) || '未知错误')); return; }
+  _panelDirty = false;
+  exitPanelEdit(false);
+  setStatus('已保存并退出编辑：' + rec.title + '（' + (rec.items || []).length + ' 行）');
+};
+
+/* ---------------- 列表 ---------------- */
+function renderPTplSel() {
+  const sel = $('pTplSel');
+  if (!sel) return;
+  sel.innerHTML = PANEL_TPLS.length
+    ? PANEL_TPLS.map((x, i) => `<option value="${i}">${x.name}（${(x.items || []).length} 行）</option>`).join('')
+    : '<option value="">（还没有模板：点看板卡片的「存为模板」）</option>';
+  renderPTplSel._ready = true;
+}
+
+function setStatus(msg) {
+  const el = $('status');
+  if (el) el.textContent = msg;
+  console.log('[status] ' + msg);
+}
+
+function savePanelTpl(p) {
+  const name = (p.title || '看板') + ' 模板';
+  const rec = { name, w: p.w || 0, fs: p.fs || 0, items: JSON.parse(JSON.stringify(p.items || [])) };
+  const i = PANEL_TPLS.findIndex(x => x.name === name);
+  if (i >= 0) PANEL_TPLS[i] = rec; else PANEL_TPLS.push(rec);
+  renderPTplSel();
+  setStatus('已存为模板：' + name + '（记得点保存）');
+}
+
+/* ---------- 退出编辑（清空展板表单 + 收起编辑预览） ---------- */
+let _panelDirty = false;
+
+function markPanelDirty() {
+  _panelDirty = true;
+  const el = $('panelEditState');
+  if (el) el.textContent = '编辑中（未保存）';
+}
+
+function clearPanelForm() {
+  pRows = [];
+  renderPRows();
+  ['pObj', 'pTitle', 'pW', 'pFs', 'pX', 'pY', 'pZ', 'pVHide'].forEach(id => { if ($(id)) $(id).value = ''; });
+  if ($('pFixed')) $('pFixed').checked = false;
+  if ($('pObj') && selObj) $('pObj').value = selObj;
+  _panelEditIdx = -1;
+  _panelDirty = false;
+  const el = $('panelEditState');
+  if (el) el.textContent = '';
+}
+
+function exitPanelEdit(askIfDirty) {
+  const wasDirty = _panelDirty;
+  if (askIfDirty && wasDirty) {
+    if (!confirm('展板有未保存的修改，确定放弃并退出？')) return false;
+  }
+  PREVIEW_ALL = false;
+  clearAllPreviews();
+  const b = $('btnPrevAll');
+  if (b) { b.textContent = '预览全部展板'; b.style.background = ''; b.style.borderColor = ''; }
+  hideDevPanel();
+  clearPanelForm();
+  hideDevPanel();          // 清表单时 renderDevPanel 可能又建了一个，再收一次
+  PREVIEW_ALL = false;
+  clearAllPreviews();
+  requestRender();
+  setStatus(wasDirty && askIfDirty ? '已退出编辑（改动已放弃；点「预览全部展板」可看全貌）'
+                                   : '已退出编辑（点「预览全部展板」可看全貌）');
+  return true;
+}
+
+let _rowsUndo = null;
+let _panelEditIdx = -1;
+let _bindEditIdx = -1;
+
+function applyPanelTpl() {
+  const sel = $('pTplSel');
+  if (!sel || sel.value === '') return;
+  const tp = PANEL_TPLS[+sel.value];
+  if (!tp) return;
+  if (pRows.length && !confirm(
+    '当前已填 ' + pRows.length + ' 行，套用模板会整块覆盖（含变量名）。\n\n' +
+    '点「确定」= 覆盖；点「取消」= 不套用。')) {
+    return;
+  }
+  _rowsUndo = JSON.parse(JSON.stringify(pRows));
+  if ($('btnUndoTpl')) $('btnUndoTpl').style.display = 'inline-block';
+  pRows = JSON.parse(JSON.stringify(tp.items || []));
+  if ($('pW')) $('pW').value = tp.w || '';
+  if ($('pFs')) $('pFs').value = tp.fs || '';
+  renderPRows();
+  setStatus('已套用模板「' + tp.name + '」：' + (tp.items || []).length + ' 行 → 点「保存展板」生效');
+}
+
+/* 把行变量里的"设备号"换成当前对象的设备号（CX数据_XXXnn），替换后不存在就保留原值 */
+function retargetRowsToDevice() {
+  const obj = (($('pObj') && $('pObj').value) || selObj || '').trim();
+  if (!obj || !pRows.length) { setStatus('先选对象、并至少填一行'); return; }
+  const mObj = /^(.+?数据_[A-Za-z]+)(\d+)/.exec(obj) || /^([A-Za-z]+\d+数据_[A-Za-z]+)(\d+)/.exec(obj);
+  if (!mObj) { setStatus('当前对象名里找不到设备号，无法自动替换'); return; }
+  const objStem = mObj[1] + mObj[2];
+  const known = new Set(Array.from($('varList').options).map(o => o.value));
+  let changed = 0, skipped = [];
+  pRows.forEach(r => {
+    const t = (r.tag || '').trim();
+    if (!t) return;
+    const m = /^(.+?数据_[A-Za-z]+)(\d+)/.exec(t) || /^([A-Za-z]+\d+数据_[A-Za-z]+)(\d+)/.exec(t);
+    if (!m) return;
+    const nt = t.replace(m[1] + m[2], objStem);
+    if (nt === t) return;
+    if (known.size && !known.has(nt)) { skipped.push(t + ' → ' + nt); return; }
+    r.tag = nt; changed++;
+  });
+  renderPRows();
+  setStatus('已改 ' + changed + ' 行到 ' + objStem +
+    (skipped.length ? ('；' + skipped.length + ' 行因目标变量不存在已跳过') : '') + '（记得保存展板）');
+}
+
+function renderAll() {
+  $('cntBind').textContent = BINDINGS.length;
+  $('cntPanel').textContent = PANELS.length;
+  $('listBind').innerHTML = BINDINGS.map((b, i) => `
+    <div class="card">
+      <div class="row" style="margin:0">
+        <span class="grow"><b>${b.obj}</b><br>
+          <span class="tag">${TYPENAME[b.type] || b.type}</span>
+          <span class="muted" style="margin-left:6px;font-size:12px">${bindBrief(b)}</span>
+        </span>
+        <button class="sm" data-eb="${i}">编辑</button>
+        <button class="sm danger" data-db="${i}">删</button>
+      </div>
+      ${b.type === 'state' ? `<div style="margin-top:6px">${bindSummary(b)}</div>` : ''}
+    </div>`).join('') || '<div class="muted">还没有绑定</div>';
+  $('listPanel').innerHTML = PANELS.map((p, i) => `
+    <div class="card"><div class="row" style="margin:0">
+      <span class="grow"><b>${p.title}</b><br><span class="muted">${p.obj} · ${(p.items||[]).length} 行${p.fixed ? ' · 固定' : ''}${
+        (p.vHide || (p.vTag && p.vMode))
+          ? ` · ${p.vHide ? ('隐藏当 ' + p.vHide + '≠0') : (p.vMode === 'show' ? '显示当' : '隐藏当') + ' ' + p.vTag + '=' + (p.vEq === undefined ? 1 : p.vEq)}`
+          : ''}</span></span>
+      <button class="sm" data-ptpl2="${i}" style="background:#17503f;border-color:#1f6b53">存为模板</button>
+      <button class="sm" data-ep="${i}">编辑</button>
+      <button class="sm danger" data-dp="${i}">删</button>
+    </div></div>`).join('') || '<div class="muted">还没有展板</div>';
+
+  $('listBind').querySelectorAll('[data-db]').forEach(el => el.onclick = async () => {
+    const b = BINDINGS[+el.dataset.db];
+    if (!b) return;
+    if (!confirm('删除这条绑定（' + (TYPENAME[b.type] || b.type) + '：' + (b.tag || '') + '）？删除后立即保存。')) return;
+    BINDINGS.splice(+el.dataset.db, 1); _bindEditIdx = -1; renderAll();
+    const r = await persistProject();
+    setStatus(r && r.ok ? '已删除该条绑定并保存' : ('删除失败：' + (r && r.error)));
+  });
+  $('listBind').querySelectorAll('[data-eb]').forEach(el => el.onclick = () => {
+    const b = BINDINGS[+el.dataset.eb];
+    selectObj(b.obj);
+    loadBindIntoForm(b);
+    switchPane('bind');
+  });
+  $('listPanel').querySelectorAll('[data-dp]').forEach(el => el.onclick = async () => {
+    const p = PANELS[+el.dataset.dp];
+    if (!p) return;
+    const nm = p.title || p.obj;
+    if (!confirm('删除展板「' + nm + '」？删除后立即保存。')) return;
+    PANELS.splice(+el.dataset.dp, 1); _panelEditIdx = -1; renderAll();
+    const r = await persistProject();
+    setStatus(r && r.ok ? ('已删除展板「' + nm + '」并保存') : ('删除失败：' + (r && r.error)));
+  });
+  $('listPanel').querySelectorAll('[data-ptpl2]').forEach(el => el.onclick = () => {
+    savePanelTpl(PANELS[+el.dataset.ptpl2]);
+  });
+  $('listPanel').querySelectorAll('[data-ep]').forEach(el => el.onclick = () => {
+    _panelEditIdx = +el.dataset.ep;
+    const p = PANELS[+el.dataset.ep];
+    selectObj(p.obj);
+    $('pTitle').value = p.title || '';
+    if (typeof p.w !== 'undefined' && $('pW')) $('pW').value = p.w || '';
+    if (typeof p.fs !== 'undefined' && $('pFs')) $('pFs').value = p.fs || '';
+    $('pFixed').checked = !!p.fixed;
+    if (p.pos) { $('pX').value = p.pos[0]; $('pY').value = p.pos[1]; $('pZ').value = p.pos[2]; }
+    if ($('pVHide')) $('pVHide').value = p.vHide || (p.vTag || '');
+    pRows = (p.items || []).map(x => ({ ...x }));
+    renderPRows();
+    switchPane('panel');
+  });
+  try { renderPipes(); } catch (e) { console.error('renderPipes', e); }
+}
+
+/* ---------------- 工具栏 ---------------- */
+$('projSel').onchange = (e) => { PID = e.target.value; loadProject(); };
+
+$('btnNewProj').onclick = async () => {
+  const id = prompt('项目 id（英文/数字，用于目录名）');
+  if (!id) return;
+  const name = prompt('显示名称', id) || id;
+  const r = await post('/api/projects', { id, name });
+  if (!r.ok) { alert('创建失败：' + r.error); return; }
+  await loadProjects();
+  PID = id; $('projSel').value = id;
+  await loadProject();
+};
+
+$('btnImport').onclick = () => $('fileInput').click();
+$('fileInput').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  if (!/^[\w.\-]+$/.test(f.name)) { alert('文件名必须纯 ASCII（字母数字 . - _）'); return; }
+  $('status').textContent = '上传中…';
+  const r = await fetch(`/api/project/upload?id=${encodeURIComponent(PID)}&name=${encodeURIComponent(f.name)}`,
+    { method: 'POST', body: f }).then(x => x.json());
+  $('status').textContent = r.ok ? `已导入 ${r.model}（${r.nodes} 节点）` : ('失败：' + r.error);
+  if (r.ok) {
+    await loadProject();
+    // 换模型后：绑定里引用的节点可能全都不存在了，立刻体检并提示
+    try {
+      const v = await fetch(`/api/project/validate?id=${encodeURIComponent(PID)}`).then(x => x.json());
+      const n = (v.issues || []).length;
+      const miss = (v.issues || []).filter(it => String(it.kind || '').indexOf('对象') >= 0).length;
+      $('status').textContent = `已导入 ${r.model}（${r.nodes} 节点）` +
+        (n ? ` · ⚠ ${n} 处失效${miss ? `（其中 ${miss} 处对象不存在，请在「全部」页重新选对象/换绑）` : ''}` : ' · 体检通过');
+      switchPane('all');
+      runHealth();
+    } catch (e) { }
+  }
+};
+
+$('btnAutoBind').onclick = async () => {
+  if (!PID) return;
+  $('status').textContent = '按名匹配中…';
+  const r = await post('/api/project/autobind', { id: PID });
+  if (r.ok === false) { $('status').textContent = r.error; return; }
+  const m = r.matched || [];
+  UNMATCHED = (r.unmatched || []).filter(u => (u.tris || 0) >= 1);
+  renderUnmatched();
+  $('status').textContent = `匹配 ${m.length} 条，未匹配 ${UNMATCHED.length} 个对象`;
+  if (m.length) {
+    for (const it of m) {
+      const i = BINDINGS.findIndex(b => b.obj === it.obj);
+      if (i >= 0) BINDINGS[i] = it; else BINDINGS.push(it);
+    }
+    renderAll();
+  }
+};
+
+/* ---------------- 未匹配对象 ---------------- */
+let UNMATCHED = [];
+
+function renderUnmatched() {
+  $('umCount').textContent = UNMATCHED.length ? ('（' + UNMATCHED.length + '）') : '';
+  $('umHint').style.display = UNMATCHED.length ? 'none' : 'block';
+  $('umList').innerHTML = UNMATCHED.map((u, i) => {
+    const cands = (u.cands || []);
+    const btn = () => cands.length
+      ? cands.map(t => `<button class="sm" data-um="${i}" data-tag="${t}" title="绑定到 ${t}">${t}</button>`).join('')
+      : `<span class="muted">无候选，手工填：</span>` +
+        `<input data-umtag="${i}" placeholder="变量名" style="flex:1;min-width:120px">` +
+        `<button class="sm" data-umbind="${i}">绑</button>`;
+    return `<div class="card" style="padding:6px">
+      <div class="row" style="margin:0 0 4px">
+        <span class="grow"><b>${u.obj}</b> <span class="muted">${u.tris || 0} 面</span></span>
+        <button class="sm danger" data-umdel="${i}">忽略</button>
+      </div>
+      <div class="row" style="margin:0;flex-wrap:wrap;gap:4px">${btn()}</div>
+    </div>`;
+  }).join('');
+
+  $('umList').querySelectorAll('[data-tag]').forEach(el => el.onclick = () => {
+    bindFromUnmatched(+el.dataset.um, el.dataset.tag);
+  });
+  $('umList').querySelectorAll('[data-umbind]').forEach(el => el.onclick = () => {
+    const i = +el.dataset.umbind;
+    const inp = $('umList').querySelector(`[data-umtag="${i}"]`);
+    const tag = (inp && inp.value || '').trim();
+    if (!tag) { alert('先填变量名'); return; }
+    bindFromUnmatched(i, tag);
+  });
+  $('umList').querySelectorAll('[data-umdel]').forEach(el => el.onclick = () => {
+    UNMATCHED.splice(+el.dataset.umdel, 1); renderUnmatched();
+  });
+}
+
+function bindFromUnmatched(i, tag) {
+  const u = UNMATCHED[i];
+  if (!u) return;
+  const rec = { obj: u.obj, type: 'color', tag: tag, min: 1, max: 1, color: '#ff2d2d' };
+  const k = BINDINGS.findIndex(b => b.obj === rec.obj);
+  if (k >= 0) BINDINGS[k] = rec; else BINDINGS.push(rec);
+  UNMATCHED.splice(i, 1);
+  renderUnmatched();
+  $('status').textContent = `已绑定 ${rec.obj} → ${tag}（记得点保存）`;
+}
+
+$('btnPTplApply').onclick = applyPanelTpl;
+
+$('btnRetarget').onclick = retargetRowsToDevice;
+
+$('btnExitPanel').onclick = () => exitPanelEdit(true);
+['pObj', 'pTitle', 'pW', 'pFs', 'pX', 'pY', 'pZ', 'pVHide'].forEach(id => {
+  const el = $(id);
+  if (el) el.addEventListener('input', markPanelDirty);
+});
+if ($('pFixed')) $('pFixed').addEventListener('change', markPanelDirty);
+
+$('btnPrevAll').onclick = async () => {
+  PREVIEW_ALL = !PREVIEW_ALL;
+  const b = $('btnPrevAll');
+  b.textContent = PREVIEW_ALL ? '隐藏预览' : '预览全部展板';
+  b.style.background = PREVIEW_ALL ? '#2b6da3' : '';
+  b.style.borderColor = PREVIEW_ALL ? '#3d8fd1' : '';
+  await renderAllPreviews();
+};
+
+['pObj', 'pTitle', 'pX', 'pY', 'pZ', 'pW', 'pFs'].forEach(id => {
+  const el = $(id);
+  if (el) el.addEventListener('input', () => renderDevPanel());
+});
+if ($('pFixed')) $('pFixed').addEventListener('change', () => renderDevPanel());
+
+document.querySelectorAll('[data-dm]').forEach(btn => {
+  btn.onclick = () => {
+    DEV_DRAGMODE = btn.dataset.dm;
+    document.querySelectorAll('[data-dm]').forEach(b => {
+      const on = b === btn;
+      b.style.background = on ? '#2b6da3' : '';
+      b.style.borderColor = on ? '#3d8fd1' : '';
+    });
+    setStatus('拖动方向：' + ({ plane: '平面（相机平面内）', y: '仅上下 Y', depth: '前后推拉' }[DEV_DRAGMODE]));
+  };
+});
+$('btnUndoTpl').onclick = () => {
+  if (!_rowsUndo) return;
+  pRows = JSON.parse(JSON.stringify(_rowsUndo));
+  _rowsUndo = null;
+  $('btnUndoTpl').style.display = 'none';
+  renderPRows();
+  setStatus('已撤销上次套用（记得保存展板）');
+};
+$('btnPTplDel').onclick = () => {
+  const sel = $('pTplSel');
+  if (!sel || sel.value === '') return;
+  if (!confirm('删除模板「' + PANEL_TPLS[+sel.value].name + '」？')) return;
+  PANEL_TPLS.splice(+sel.value, 1);
+  renderPTplSel();
+  setStatus('模板已删除（记得点保存）');
+};
+
+async function persistProject() {
+  if (!PID) return { ok: false, error: '没有项目' };
+  return await post('/api/project', {
+    id: PID,
+    bindings: { items: BINDINGS },
+    panels: { items: PANELS },
+    pipes: { items: PIPES },
+    panelTpls: PANEL_TPLS,
+    pipeTpls: PIPE_TPLS
+  });
+}
+
+$('btnSave').onclick = async () => {
+  if (!PID) return;
+  const r = await persistProject();
+  $('status').textContent = r.ok ? '已保存' : ('保存失败：' + r.error);
+};
+
+$('btnRun').onclick = () => {
+  if (!PID) return;
+  const w = window.open('/app/runtime.html?p=' + encodeURIComponent(PID), '_blank');
+  if (!w) location.href = '/app/runtime.html?p=' + encodeURIComponent(PID);
+};
+
+$('btnVardata').onclick = () => {
+  const w = window.open('/app/vardata.html', '_blank');
+  if (!w) location.href = '/app/vardata.html';       // 被弹窗拦截时改为当前页跳转
+};
+
+$('btnSaveSet').onclick = async () => {
+  const r = await post('/api/project', {
+    id: PID,
+    project: {
+      rest: { base: $('sRest').value.trim() },
+      click: {
+        enabled: $('sClickOn').checked,
+        nameVar: $('sClickName').value.trim() || '模型名称',
+        actionVar: $('sClickAct').value.trim() || '模型单击动作',
+        edge: $('sClickEdge').checked,
+      },
+      quality: $('sQ').value,
+      background: $('sBg').value,
+      poll: Math.max(80, Math.min(5000, Number($('sPoll').value) || 300)),
+      liveTtl: Math.max(0, Math.min(5000, Number($('sTtl').value) || 0)),
+      fresh: $('sFresh').checked
+    }
+  });
+  $('status').textContent = r.ok ? '设置已保存' : ('失败：' + r.error);
+};
+
+$('bType').onchange = () => {
+function refreshDevWarn() {
+  const box = $('gateWarn');
+  if (!box) return;
+  const obj = $('bObj').value, g = ($('bGate').value || '').trim();
+  const a = devStem(obj), b = devStem(g);
+  if (a && b && a !== b) {
+    const fixed = g.replace(b, a);
+    box.style.display = 'block';
+    box.style.color = '#ffb4b4';
+    box.innerHTML = '⚠ 启停变量属于 ' + b + '，与本对象 ' + a +
+      ' 不是同一台设备。 <button class="sm" id="gateFix" style="margin-left:4px">改成 ' + fixed + '</button>';
+    const btn = $('gateFix');
+    if (btn) btn.onclick = () => {
+      $('bGate').value = fixed;
+      refreshDevWarn();
+      $('status').textContent = '已把启停变量改为 ' + fixed + '（记得点「加到绑定」或「保存」）';
+    };
+  } else {
+    box.style.display = 'none';
+    box.textContent = '';
+  }
+}
+['bObj', 'bTag', 'bGate'].forEach(id => {
+  const el = $(id);
+  if (el) el.addEventListener('input', refreshDevWarn);
+});
+
+  const t = $('bType').value;
+  $('rowFactor').style.display = t === 'rot' ? 'flex' : 'none';
+  $('rowColor').style.display = t === 'color' ? 'flex' : 'none';
+  $('rowGate').style.display = t === 'spin' ? 'flex' : 'none';
+  const isSt = (t === 'state');
+  $('rowRules').style.display = isSt ? 'block' : 'none';
+  $('bTag').parentElement.style.display = isSt ? 'none' : 'flex';
+  const rowRange = $('bMin') ? $('bMin').parentElement : null;
+  if ($('rowLit')) $('rowLit').style.display = (t === 'spin' || t === 'rot') ? 'flex' : 'none';
+  if (rowRange) rowRange.style.display = isSt ? 'none' : 'flex';
+  $('rowColor').style.display = (t === 'color') ? 'flex' : 'none';
+  if (isSt && !bRules.length) { bRules.push({ tag: '', mode: 'eq', eq: 1, color: '#ff2d2d' }); renderBRules(); }
+  $('rowSpeed').style.display = t === 'spin' ? 'flex' : 'none';
+  const isRotLike = (t === 'spin' || t === 'rot');
+  if ($('rowSpinDir')) $('rowSpinDir').style.display = isRotLike ? 'flex' : 'none';
+  if ($('rowAxis')) $('rowAxis').style.display = isRotLike ? 'flex' : 'none';
+  const isGrad = (t === 'grad');
+  ['rowGrad', 'rowGradBar', 'rowGradHint'].forEach(id => {
+    const el = $(id); if (el) el.style.display = isGrad ? 'flex' : 'none';
+  });
+  if ($('rowColor')) $('rowColor').style.display = (t === 'color') ? 'flex' : 'none';
+};
+$('bType').onchange();
+
+$('objFilter').oninput = renderObjList;
+
+document.querySelectorAll('.tabs > div').forEach(t => t.onclick = () => switchPane(t.dataset.pane));
+function switchPane(p) {
+  document.querySelectorAll('.tabs > div').forEach(x => x.classList.toggle('on', x.dataset.pane === p));
+  document.querySelectorAll('.pane').forEach(x => x.classList.toggle('on', x.id === 'pane-' + p));
+  setTimeout(() => { try { renderDevPanel(); } catch (e) { console.warn('preview', e); } }, 0);
+}
+const URLTab = new URLSearchParams(location.search).get('tab');
+if (URLTab) setTimeout(() => switchPane(URLTab), 80);
+
+/* ?pload=N：把第 N 块展板载入表单，并在 3D 里出现可拖动的预览 */
+const URLPload = new URLSearchParams(location.search).get('pload');
+if (URLPload !== null) {
+  let _pn = 0;
+  const _ivp = setInterval(() => {
+    if (++_pn > 80) { clearInterval(_ivp); return; }
+    if (!PANELS.length || !$('listPanel')) return;
+    clearInterval(_ivp);
+    const i = Math.max(0, Math.min(PANELS.length - 1, +URLPload || 0));
+    const el = $('listPanel').querySelector('[data-ep="' + i + '"]');
+    if (el) el.click();
+    switchPane('panel');
+  }, 250);
+}
+const URLAuto = new URLSearchParams(location.search).get('auto');
+const URLSel = new URLSearchParams(location.search).get('sel');
+const URLFocus = new URLSearchParams(location.search).get('focus');
+const URLPRow = Number(new URLSearchParams(location.search).get('prow') || 0);
+if (URLPRow > 0) {
+  let _t4 = 0;
+  const _iv4 = setInterval(() => {
+    if (++_t4 > 80) { clearInterval(_iv4); return; }
+    if ($('btnAddRow')) {
+      clearInterval(_iv4);
+      for (let i = 0; i < URLPRow; i++) pRows.push({ label: '', tag: '', unit: '', rw: false, dec: 2, thou: true });
+      renderPRows();
+    }
+  }, 250);
+}
+const URLTpl = new URLSearchParams(location.search).get('tpl');
+if (URLTpl === '1') {
+  let _t3 = 0;
+  const _iv3 = setInterval(() => {
+    if (++_t3 > 80) { clearInterval(_iv3); return; }
+    if (selObj && BINDINGS.length) {
+      const b = BINDINGS.find(x => x.obj === selObj) || BINDINGS[0];
+      if (b) { clearInterval(_iv3); setTemplate(b); }
+    }
+  }, 250);
+}
+const URLBType = new URLSearchParams(location.search).get('btype');
+if (URLBType) {
+  let _t2 = 0;
+  const _iv = setInterval(() => {
+    if (++_t2 > 60) { clearInterval(_iv); return; }
+    if ($('bType') && $('bType').options.length) {
+      clearInterval(_iv);
+      $('bType').value = URLBType;
+      $('bType').onchange();
+    }
+  }, 250);
+}
+const URLBLoad = new URLSearchParams(location.search).get('bload');
+if (URLBLoad !== null && URLBLoad !== '') {
+  let _b2 = 0;
+  const _iv2 = setInterval(() => {
+    if (++_b2 > 80) { clearInterval(_iv2); return; }
+    if (typeof BINDINGS !== 'undefined' && BINDINGS.length) {
+      clearInterval(_iv2);
+      const b = BINDINGS[+URLBLoad];
+      if (b) { loadBindIntoForm(b); $('status').textContent = 'bload=' + URLBLoad + ' obj=' + $('bObj').value + ' rules=' + (b.rules || []).length; }
+    }
+  }, 200);
+}
+if (URLSel) {
+  let _tries = 0;
+  const _t = setInterval(() => {
+    _tries++;
+    if (root) {
+      clearInterval(_t);
+      try { selectObj(URLSel); if (URLFocus === '1') focusOn(URLSel); } catch (e) { }
+    } else if (_tries > 60) clearInterval(_t);
+  }, 250);
+}
+if (URLAuto === '1') setTimeout(() => { try { $('btnAutoBind').onclick(); } catch (e) {} }, 900);
+
+
+/* 变量下拉 */
+async function loadVars() {
+  try {
+    const j = await api('/api/vars?limit=5000');
+    const list = j.vars || [];
+    $('varList').innerHTML = list.map(v =>
+      `<option value="${v.n}">${(v.c || v.s || '')}</option>`).join('');
+    const el = $('vtCount');
+    if (el) el.textContent = list.length ? ('当前变量表：' + list.length + ' 条') : '当前变量表为空';
+    return list.length;
+  } catch (e) { console.warn('loadVars 失败', e); return 0; }
+}
+loadVars();
+
+/* 启动 */
+(async () => {
+  await loadProjects();
+  if (PID) await loadProject();
+  resize();
+  animate();
+})();
+
+/* ---------- 规则体检（模型更新后检查对象名/变量名是否还有效） ---------- */
+let HEALTH = null;
+
+const HAZKIND = {
+  '绑定对象': '#e06c75', '绑定变量': '#d19a66', '规则变量': '#d19a66',
+  '展板对象': '#56b6c2', '展板变量': '#56b6c2', '管线对象': '#c678dd', '管线变量': '#c678dd'
+};
+
+function renderHealth() {
+  const box = $('healthBox');
+  if (!box) return;
+  if (!HEALTH) {
+    box.innerHTML = '<div class="card"><h4>规则体检</h4>'
+      + '<div class="muted" style="margin-bottom:6px">模型更新后，检查绑定 / 展板 / 管线里引用的对象名与变量名是否还存在。</div>'
+      + '<button class="sm primary" id="btnHealth">检查规则可用性</button></div>';
+    $('btnHealth').onclick = runHealth;
+    return;
+  }
+  const r = HEALTH;
+  const bad = r.issues || [];
+  const head = r.ok
+    ? '<span style="color:#7ddc8a">✅ 全部可用</span>'
+    : '<span style="color:#e06c75">⚠ ' + bad.length + ' 处失效</span>';
+  let h = '<div class="card"><h4>规则体检 ' + head + '</h4>';
+  h += '<div class="muted" style="margin-bottom:6px">模型 ' + (r.model || '—')
+     + ' · 检查对象 ' + r.objChecked + ' 个 / 变量 ' + r.tagChecked + ' 个'
+     + ' · 模型节点 ' + r.nodes + ' / 变量表 ' + r.tags + '</div>';
+  h += '<button class="sm" id="btnHealth">重新检查</button>';
+  h += '<div id="healthList" style="margin-top:6px;max-height:220px;overflow:auto"></div></div>';
+  box.innerHTML = h;
+  $('btnHealth').onclick = runHealth;
+
+  const list = $('healthList');
+  if (!bad.length) { list.innerHTML = '<div class="muted">没有发现问题。</div>'; return; }
+  bad.forEach((it, k) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:flex-start;gap:6px;padding:4px 0;border-bottom:1px solid #16304a;font-size:12px';
+    const c = HAZKIND[it.kind] || '#888';
+    row.innerHTML = '<span style="flex:0 0 64px;color:' + c + '">' + it.kind + '</span>'
+      + '<span style="flex:1;min-width:0;white-space:normal;word-break:break-all;line-height:1.35" title="' + it.what + '">' + it.what + '</span>'
+      + '<span class="muted" style="flex:0 0 78px;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (it.title || '') + '">' + (it.title || '') + '</span>';
+    row.dataset.kind = it.kind;
+    row.dataset.what = it.what;
+    const del = document.createElement('button');
+    del.className = 'sm danger';
+    del.textContent = '删除';
+    del.onclick = () => healthDel(it, del);
+    row.appendChild(del);
+    list.appendChild(row);
+    // 对象类失效：给出候选换绑
+    const cands = it.cands || [];
+    if (cands.length) {
+      const crow = document.createElement('div');
+      crow.dataset.kind = it.kind;
+      crow.dataset.what = it.what;
+      crow.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;padding:0 0 5px 70px';
+      cands.slice(0, 4).forEach(c => {
+        const b = document.createElement('button');
+        b.className = 'sm';
+        b.textContent = '→ ' + c.name;
+        b.title = '相似度 ' + c.score;
+        b.onclick = () => healthRebind(it, c.name);
+        crow.appendChild(b);
+      });
+      list.appendChild(crow);
+    }
+  });
+}
+
+const HIST_REASON = { save: '保存', manual: '手动', 'before-restore': '恢复前' };
+
+function histReason(r) { return HIST_REASON[r] || r || '保存'; }
+
+async function loadProjPath() {
+  const el = $('projPathLine');
+  if (!el) return;
+  try {
+    const r = await (await fetch('/api/projects', { cache: 'no-store' })).json();
+    const list = r.projects || [];
+    if (!PID) { el.textContent = '还没选项目'; return; }
+    const p = list.find(function (x) { return x.id === PID; }) || {};
+    const root = (list[0] && list[0].dir) ? list[0].dir.replace(/[\\/][^\\/]+$/, '') : '';
+    el.innerHTML = '项目根目录：<code>' + (root || '（见服务端 projects 目录）') + '</code><br>' +
+      '当前项目：<code>' + (p.dir || ('projects\\' + PID)) + '</code>';
+  } catch (e) { el.textContent = '读取失败：' + e.message; }
+}
+
+async function loadHistList() {
+  const box = $('histList');
+  if (!box) return;
+  const st = $('histStatus');
+  if (!PID) { box.innerHTML = '<div class="muted">先选项目</div>'; return; }
+  box.innerHTML = '<div class="muted">读取中…</div>';
+  let r;
+  try {
+    r = await (await fetch('/api/projhistory?id=' + encodeURIComponent(PID), { cache: 'no-store' })).json();
+  } catch (e) {
+    box.innerHTML = '<div class="muted">读取失败：' + e.message + '</div>';
+    return;
+  }
+  if (!r.ok) { box.innerHTML = '<div class="muted">' + (r.error || '读取失败') + '</div>'; return; }
+  if ($('histKeep')) $('histKeep').placeholder = String(r.keep || 40);
+  if (st) st.textContent = '共 ' + (r.items || []).length + ' 份快照' + (r.dir ? '（' + r.dir + '）' : '');
+  const items = r.items || [];
+  if (!items.length) {
+    box.innerHTML = '<div class="muted">还没有快照。点上方「立即备份一份」，或先保存一次项目。</div>';
+    return;
+  }
+  box.innerHTML = items.map(function (it) {
+    const c = it.counts || {};
+    const meta = '绑定 ' + (c.bindings || 0) + ' · 展板 ' + (c.panels || 0) + ' · 管线 ' + (c.pipes || 0) +
+      ' · 体积 ' + Math.max(1, Math.round((it.size || 0) / 1024)) + ' KB';
+    return '<div class="bindcard" style="padding:8px 10px">' +
+      '<div style="display:flex;align-items:center;gap:8px">' +
+      '<b style="font-size:13px">' + it.time + '</b>' +
+      '<span class="badge">' + histReason(it.reason) + '</span>' +
+      '<span style="flex:1"></span>' +
+      '<button class="sm primary" data-hist-restore="' + it.snap + '">恢复</button>' +
+      '<button class="sm" data-hist-del="' + it.snap + '">删除</button>' +
+      '</div>' +
+      '<div class="muted" style="margin-top:4px">' + meta + '</div>' +
+      '</div>';
+  }).join('');
+  box.querySelectorAll('[data-hist-restore]').forEach(function (b) {
+    b.onclick = async function () {
+      const snap = b.getAttribute('data-hist-restore');
+      if (!confirm('确定把项目恢复到 ' + snap + ' 这一版？\n当前状态会先自动备份一份，可再回退。')) return;
+      b.disabled = true; b.textContent = '恢复中…';
+      try {
+        const rr = await (await fetch('/api/projhistory', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: PID, action: 'restore', snap: snap })
+        })).json();
+        if (rr.ok) { healthToast('已恢复到 ' + snap, '#7ddc8a'); await loadProject(); await loadHistList(); }
+        else { healthToast('恢复失败：' + (rr.error || ''), '#ff6b6b'); b.disabled = false; b.textContent = '恢复'; }
+      } catch (e) { healthToast('恢复失败：' + e.message, '#ff6b6b'); b.disabled = false; b.textContent = '恢复'; }
+    };
+  });
+  box.querySelectorAll('[data-hist-del]').forEach(function (b) {
+    b.onclick = async function () {
+      const snap = b.getAttribute('data-hist-del');
+      if (!confirm('删除这份快照？')) return;
+      try {
+        const rr = await (await fetch('/api/projhistory', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: PID, action: 'delete', snap: snap })
+        })).json();
+        if (rr.ok) { healthToast('已删除 ' + snap, '#7ddc8a'); loadHistList(); }
+        else healthToast('删除失败：' + (rr.error || ''), '#ff6b6b');
+      } catch (e) { healthToast('删除失败：' + e.message, '#ff6b6b'); }
+    };
+  });
+}
+
+async function histSnapshotNow() {
+  if (!PID) return;
+  try {
+    const r = await (await fetch('/api/projhistory', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: PID, action: 'snapshot', reason: 'manual', force: true })
+    })).json();
+    if (r.ok) { healthToast(r.skipped ? '内容和上一份一样，未新增' : '已备份 ' + r.snap, '#7ddc8a'); loadHistList(); }
+    else healthToast('备份失败：' + (r.error || ''), '#ff6b6b');
+  } catch (e) { healthToast('备份失败：' + e.message, '#ff6b6b'); }
+}
+
+async function histPrune() {
+  if (!PID) return;
+  const k = parseInt(($('histKeep') || {}).value, 10);
+  if (!k || k < 1) { healthToast('先填保留份数（1~500）', '#ffb020'); return; }
+  try {
+    const r = await (await fetch('/api/projhistory', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: PID, action: 'prune', keep: k })
+    })).json();
+    if (r.ok) { healthToast('保留最近 ' + r.keep + ' 份，清理了 ' + (r.removed || []).length + ' 份', '#7ddc8a'); loadHistList(); }
+    else healthToast('设置失败：' + (r.error || ''), '#ff6b6b');
+  } catch (e) { healthToast('设置失败：' + e.message, '#ff6b6b'); }
+}
+
+
+function healthDropRow(it) {
+  const list = $('healthList');
+  if (!list) return;
+  let n = 0;
+  list.querySelectorAll('[data-what]').forEach(el => {
+    if (el.dataset.kind === it.kind && el.dataset.what === it.what) { el.remove(); n++; }
+  });
+  const left = list.querySelectorAll('[data-what]').length;
+  const h4 = list.previousElementSibling;   // 不使用，只是占位
+  const card = list.parentElement;
+  const ttl = card ? card.querySelector('h4') : null;
+  if (ttl) {
+    ttl.innerHTML = left
+      ? '<span style="color:#d19a66">⚠ ' + left + ' 处失效（含未保存的修改）</span>'
+      : '<span style="color:#7ddc8a">✅ 已改完，点「保存」写回后生效</span>';
+  }
+  if (!left && !list.querySelector('.muted')) {
+    const d = document.createElement('div');
+    d.className = 'muted';
+    d.textContent = '本地已全部处理，点顶部「保存」写回文件。';
+    list.appendChild(d);
+  }
+  return n;
+}
+
+function healthRebind(it, name) {
+  try {
+    if (it.kind === '绑定对象') BINDINGS[it.idx].obj = name;
+    else if (it.kind === '展板对象') PANELS[it.idx].obj = name;
+    else if (it.kind === '管线对象') PIPES[it.idx].objs[it.sub || 0] = name;
+    else { healthToast('该类型不支持换绑', '#d19a66'); return; }
+    healthToast('已换绑：' + it.what + ' → ' + name + '（记得点顶部「保存」）', '#3fa9f5');
+    if (typeof renderAll === 'function') renderAll();
+    if (typeof renderSelBinds === 'function') renderSelBinds();
+    healthDropRow(it);
+  } catch (e) {
+    healthToast('换绑失败：' + e, '#e06c75');
+  }
+}
+
+function runHealth() {
+  if (!PROJECT) return;
+  $('healthBox').innerHTML = '<div class="card"><h4>规则体检</h4><div class="muted">检查中…</div></div>';
+  const _pid = (PROJECT && PROJECT.project && PROJECT.project.id) || (PROJECT && PROJECT.id) || '';
+  fetch('/api/project/validate?id=' + encodeURIComponent(_pid))
+    .then(r => r.json())
+    .then(j => { HEALTH = j; renderHealth(); })
+    .catch(e => { $('healthBox').innerHTML = '<div class="card"><h4>规则体检</h4><div class="muted">检查失败：' + e + '</div></div>'; });
+}
+
+function healthToast(msg, color) {
+  let el = document.getElementById('hvToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'hvToast';
+    el.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:9999;'
+      + 'padding:8px 14px;border-radius:6px;font-size:13px;background:#12324a;color:#dff0ff;'
+      + 'border:1px solid #2b5f86;box-shadow:0 4px 14px rgba(0,0,0,.45);opacity:0;transition:opacity .18s';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  if (color) el.style.borderColor = color;
+  el.style.opacity = '1';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.opacity = '0'; }, 2600);
+}
+
+function _armConfirm(btn, label) {
+  if (!btn) return false;
+  if (btn.dataset.arm === '1') return true;
+  btn.dataset.arm = '1';
+  btn._txt = btn.textContent;
+  btn.textContent = label || '确认删';
+  btn.style.background = '#7a1f26';
+  clearTimeout(btn._t);
+  btn._t = setTimeout(() => {
+    btn.dataset.arm = '';
+    btn.textContent = btn._txt || '删除';
+    btn.style.background = '';
+  }, 4000);
+  return false;
+}
+
+function healthDel(it, btn) {
+  const kind = String(it.kind || '');
+
+  // 变量类
+  if (kind.endsWith('变量')) {
+    if (kind === '管线变量') {
+      healthToast('「' + it.what + '」写在管线条件表达式里，请到「管道」页签改条件表达式。', '#d19a66');
+      return;
+    }
+    if (kind === '绑定变量' && (it.field || 'tag') === 'tag') {
+      healthToast('这是整条绑定的主变量，请载入该绑定后重选变量。', '#d19a66');
+      return;
+    }
+    if (!_armConfirm(btn, '确认移除')) return;
+    const b = BINDINGS[it.idx];
+    if (kind === '规则变量') {
+      if (!b || !b.rules || !b.rules.length) { healthToast('绑定索引越界，请点「重新检查」。', '#e06c75'); return; }
+      b.rules.splice(Math.min(it.sub || 0, b.rules.length - 1), 1);
+      if (!b.rules.length) BINDINGS.splice(it.idx, 1);
+    } else if (kind === '绑定变量') {
+      if (!b) { healthToast('绑定索引越界，请点「重新检查」。', '#e06c75'); return; }
+      b[it.field || 'tag'] = '';
+    } else if (kind === '展板变量') {
+      const p = PANELS[it.idx];
+      if (!p || !p.items || !p.items.length) { healthToast('展板索引越界，请点「重新检查」。', '#e06c75'); return; }
+      p.items.splice(Math.min(it.sub || 0, p.items.length - 1), 1);
+    }
+    try { renderAll(); } catch (e) { }
+    try { renderSelBinds && renderSelBinds(); } catch (e) { }
+    healthDropRow(it);
+    healthToast('已移除「' + it.what + '」，记得点顶部「保存」写回文件。', '#7ddc8a');
+    return;
+  }
+
+  // 对象类：整条删除
+  if (!_armConfirm(btn, '确认删')) return;
+  const arr = kind.startsWith('绑定') ? BINDINGS : kind.startsWith('展板') ? PANELS : PIPES;
+  if (it.idx >= 0 && it.idx < arr.length) {
+    arr.splice(it.idx, 1);
+    try { renderAll(); } catch (e) { }
+    try { renderSelBinds && renderSelBinds(); } catch (e) { }
+    healthDropRow(it);
+    healthToast('已删除（' + kind + '：' + (it.what || '') + '），记得点顶部「保存」写回文件。', '#7ddc8a');
+  } else {
+    healthToast('索引越界，请点「重新检查」后再试。', '#e06c75');
+  }
+}
+
+</script>
+</body>
+</html>

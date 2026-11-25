@@ -1,0 +1,12 @@
+{
+ "id": "demo",
+ "name": "示例场景",
+ "model": "demo.glb",
+ "rest": {
+  "base": ""
+ },
+ "created": 1795613183,
+ "updated": 1795613183,
+ "quality": "high",
+ "background": "dark"
+}

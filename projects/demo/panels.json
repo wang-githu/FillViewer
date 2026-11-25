@@ -1,0 +1,56 @@
+{
+ "items": [
+  {
+   "title": "示例罐",
+   "obj": "Demo_Tank",
+   "fixed": true,
+   "pos": [
+    2.4,
+    8.2,
+    0.0
+   ],
+   "w": 300,
+   "fs": 15,
+   "items": [
+    {
+     "label": "液位",
+     "tag": "Demo_Level",
+     "unit": " m",
+     "dec": 2
+    },
+    {
+     "label": "温度",
+     "tag": "Demo_Temp",
+     "unit": " ℃",
+     "dec": 1
+    }
+   ]
+  },
+  {
+   "title": "出口管路",
+   "obj": "Demo_Pipe_1",
+   "fixed": true,
+   "pos": [
+    -5.2,
+    8.6,
+    0.0
+   ],
+   "w": 280,
+   "fs": 14,
+   "items": [
+    {
+     "label": "流量",
+     "tag": "Demo_Flow",
+     "unit": " m³/h",
+     "dec": 1
+    },
+    {
+     "label": "压力",
+     "tag": "Demo_Pressure",
+     "unit": " kPa",
+     "dec": 0
+    }
+   ]
+  }
+ ]
+}

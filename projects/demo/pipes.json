@@ -1,0 +1,26 @@
+{
+ "items": [
+  {
+   "id": "p_demo",
+   "name": "示例管路（按流量调速）",
+   "mode": "flow",
+   "expr": "",
+   "exprText": "",
+   "color": "#19ffd8",
+   "speed": 6,
+   "r": 0.3,
+   "speedVar": "Demo_Flow",
+   "speedFull": 50,
+   "reverse": "",
+   "ramp": 0.8,
+   "count": 3,
+   "tail": 3,
+   "core": 2,
+   "objs": [
+    "Demo_Pipe_1",
+    "Demo_Pipe_2",
+    "Demo_Pipe_3"
+   ]
+  }
+ ]
+}

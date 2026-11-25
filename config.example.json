@@ -1,0 +1,13 @@
+{
+  "restBase": "https://YOUR-WINCC-HOST:8092/WinCCRestService",
+  "restUser": "YOUR-WINCC-USER",
+  "restPass": "YOUR-WINCC-PASSWORD",
+  "liveTtl": 200,
+  "runtime": {
+    "autostartMode": "none",
+    "autoopen": false,
+    "kiosk": false,
+    "project": "demo",
+    "model": ""
+  }
+}

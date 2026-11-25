@@ -1,0 +1,74 @@
+{
+ "items": [
+  {
+   "obj": "Demo_Valve_A",
+   "type": "state",
+   "blinkHz": 1,
+   "rules": [
+    {
+     "tag": "Demo_ValveA_Open",
+     "eq": 1,
+     "color": "#00ff00"
+    },
+    {
+     "tag": "Demo_ValveA_Open",
+     "eq": 0,
+     "color": "#ff2d2d"
+    }
+   ]
+  },
+  {
+   "obj": "Demo_Valve_B",
+   "type": "state",
+   "blinkHz": 1,
+   "rules": [
+    {
+     "tag": "Demo_ValveB_Open",
+     "eq": 1,
+     "color": "#00ff00"
+    },
+    {
+     "tag": "Demo_ValveB_Open",
+     "eq": 0,
+     "color": "#ff2d2d",
+     "blink": true
+    }
+   ]
+  },
+  {
+   "obj": "Demo_Mixer",
+   "type": "state",
+   "blinkHz": 1,
+   "rules": [
+    {
+     "tag": "Demo_Pump_Run",
+     "eq": 1,
+     "color": "#10d28a"
+    },
+    {
+     "tag": "Demo_Pump_Run",
+     "eq": 0,
+     "color": "#8892a0"
+    }
+   ]
+  },
+  {
+   "obj": "Demo_Tank_Liquid",
+   "type": "level",
+   "tag": "Demo_Level",
+   "min": 0,
+   "max": 6.4
+  },
+  {
+   "obj": "Demo_Fan",
+   "type": "spin",
+   "tag": "Demo_Pump_Speed",
+   "min": 0,
+   "max": 50,
+   "speed": 1.5,
+   "gate": "Demo_Pump_Run",
+   "axis": "y",
+   "dir": 1
+  }
+ ]
+}

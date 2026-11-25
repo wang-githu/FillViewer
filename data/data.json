@@ -1,0 +1,13 @@
+{
+ "ts": 1795613183,
+ "values": {
+  "Demo_Level": 3.2,
+  "Demo_Flow": 18.5,
+  "Demo_Temp": 42.0,
+  "Demo_Pressure": 180.0,
+  "Demo_ValveA_Open": true,
+  "Demo_ValveB_Open": false,
+  "Demo_Pump_Run": true,
+  "Demo_Pump_Speed": 32.0
+ }
+}
