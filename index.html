@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FillViewer · 3D 组态画面</title>
+<style>
+  :root{
+    --bg:#0d1218; --card:#151c24; --line:#243040; --fg:#e6edf3; --dim:#8b98a8;
+    --acc:#2f81f7; --ok:#2ea043;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 50% -10%,#16324a 0%,var(--bg) 55%);
+       color:var(--fg);font:15px/1.7 "Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+       min-height:100vh;display:flex;flex-direction:column;align-items:center}
+  header{padding:56px 24px 8px;text-align:center}
+  h1{margin:0 0 8px;font-size:30px;letter-spacing:.5px}
+  h1 span{color:var(--acc)}
+  .sub{color:var(--dim);font-size:14px;max-width:640px;margin:0 auto}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+        gap:16px;width:min(1000px,92vw);margin:34px 0 8px}
+  a.card{display:block;background:var(--card);border:1px solid var(--line);border-radius:12px;
+         padding:18px 18px 16px;text-decoration:none;color:var(--fg);transition:.15s}
+  a.card:hover{border-color:var(--acc);transform:translateY(-2px)}
+  .ico{font-size:22px}
+  .t{font-weight:600;margin:8px 0 4px}
+  .d{color:var(--dim);font-size:13px;line-height:1.6}
+  .tag{display:inline-block;font-size:11px;color:#9fd0ff;border:1px solid #2b4a6b;
+       border-radius:99px;padding:1px 8px;margin-left:6px;vertical-align:2px}
+  footer{margin:auto 0 26px;color:#6b7787;font-size:12.5px;text-align:center;padding:22px 20px 0}
+  code{background:#0b1117;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:12.5px}
+  .hint{width:min(1000px,92vw);background:#101821;border:1px solid var(--line);border-radius:12px;
+        padding:14px 18px;color:var(--dim);font-size:13px;margin-top:18px}
+  .hint b{color:var(--fg)}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Fill<span>Viewer</span></h1>
+  <p class="sub">把 WinCC / PLC 的实时数据映射到浏览器里的 3D 场景 —— 颜色、液位、旋转、管道流动、数据看板，全部网页勾选配置。</p>
+</header>
+
+<div class="grid">
+  <a class="card" href="/app/runtime.html?p=demo">
+    <div class="ico">▶</div>
+    <div class="t">运行画面<span class="tag">演示</span></div>
+    <div class="d">全屏 3D 实时画面，读不到 WinCC 时自动用离线示例数据</div>
+  </a>
+  <a class="card" href="/app/studio.html">
+    <div class="ico">⚙</div>
+    <div class="t">配置台</div>
+    <div class="d">导入模型、绑定变量、摆展板、建管线、接 REST、开机自启</div>
+  </a>
+  <a class="card" href="/app/vardata.html">
+    <div class="ico">▤</div>
+    <div class="t">变量数据</div>
+    <div class="d">分页浏览变量表、筛选、单点读取与写入测试</div>
+  </a>
+  <a class="card" href="/docs/%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E.md">
+    <div class="ico">✎</div>
+    <div class="t">使用说明</div>
+    <div class="d">完整手册：模型准备、六种绑定、展板、管线、接 WinCC、排错</div>
+  </a>
+</div>
+
+<div class="hint">
+  <b>首次使用？</b> 先开 <b>运行画面</b> 看效果（示例场景自带动画），再进 <b>配置台</b> 换成自己的模型。
+  服务默认只监听 <code>127.0.0.1:8099</code>，端口可用环境变量 <code>FILLVIEWER_PORT</code> 改。
+</div>
+
+<footer>
+  MIT License · 与 Siemens 无关，WinCC® 是 Siemens AG 的商标 · 示例模型由本仓库脚本生成
+</footer>
+
+</body>
+</html>

@@ -51,15 +51,17 @@ set FILLVIEWER_PORT=8100      # Windows
 FILLVIEWER_PORT=8100 python server.py   # Linux/macOS
 ```
 
-打开后：
+打开后首页是 `index.html`，四个入口：
 
 - `app/runtime.html?p=demo` —— 运行画面（演示场景）
 - `app/studio.html` —— 配置台（绑定 / 展板 / 管道 / 设置）
 - `app/vardata.html` —— 变量数据页
+- `docs/使用说明.md` —— **完整使用手册**（也提供 `docs/使用说明.docx` 下载）
 
 ## 目录结构
 
 ```
+index.html                首页入口（四个卡片：运行画面 / 配置台 / 变量数据 / 使用说明）
 server.py                 本地服务（静态文件 + REST 代理 + 配置 API）
 app/runtime.html          运行画面
 app/studio.html           配置台
@@ -69,8 +71,7 @@ js/three.module.js        three.js r162（含 addons）
 data/vartable.json        变量表（示例 8 个 Demo_*）
 data/data.json            离线数据（REST 不可用时用它）
 projects/demo/            project.json + bindings/panels/pipes + model/demo.glb
-models/demo.glb           示例模型（由 tools/_make_demo_glb.py 生成）
-docs/                     操作手册 / WinCC REST 教程 / Postman 教程 / 管道动画说明
+docs/                     使用说明（md + docx）/ 操作手册 / WinCC REST 教程 / Postman 教程 / 管道动画说明
 wincc/                    WinCC 侧 VBS 脚本（把变量定时写到 data/data.json）
 config.example.json       配置模板（复制成 config.json 再改）
 ```
@@ -105,7 +106,7 @@ config.example.json       配置模板（复制成 config.json 再改）
 
 ## 许可
 
-MIT，见 [LICENSE](LICENSE)。示例模型 `models/demo.glb` 由本仓库脚本生成，可自由使用。
+MIT，见 [LICENSE](LICENSE)。示例模型 `projects/demo/model/demo.glb` 由本仓库脚本生成，可自由使用。
 
 
 ## English
