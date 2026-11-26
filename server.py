@@ -156,6 +156,11 @@ def cfg_ssl_context():
     ctx = ssl.create_default_context()
     ca = (sec("restCaFile") or "").strip()
     if ca:
+        if not os.path.isfile(ca):
+            # 换机器/换目录后绝对路径可能失效：自动回落到本机 certs\wincc-rest.pem
+            cand = os.path.join(ROOT, "certs", "wincc-rest.pem")
+            if os.path.isfile(cand):
+                ca = cand
         if os.path.isfile(ca):
             try:
                 ctx.load_verify_locations(ca)
@@ -776,7 +781,10 @@ def live_data(extra=None, ttl=None, fresh=False):
         if vals is not None and any(v is not None for v in vals.values()):
             return {"ts": int(now), "src": "rest", "values": vals, "errors": dict(_last_errs)}
         p = _read_json(DATA_FILE, {"ts": 0, "values": {}})
-        return {"ts": p.get("ts", 0), "src": "file", "values": p.get("values", {})}
+        why = ("REST 未连通" if not _rest_alive()
+               else (list(_last_errs.values())[0] if _last_errs else "REST 无数据"))
+        return {"ts": p.get("ts", 0), "src": "file", "values": p.get("values", {}),
+                "fallback": str(why)[:200]}
 
     if ttl is None:
         try:
@@ -799,7 +807,13 @@ def live_data(extra=None, ttl=None, fresh=False):
 
     # 退回文件
     p = _read_json(DATA_FILE, {"ts": 0, "values": {}})
-    payload = {"ts": p.get("ts", 0), "src": "file", "values": p.get("values", {})}
+    why = "REST 未连通"
+    if _last_errs:
+        why = list(_last_errs.values())[0]
+    elif not _rest_alive():
+        why = "REST 被判定为不可用（连接失败）"
+    payload = {"ts": p.get("ts", 0), "src": "file", "values": p.get("values", {}),
+               "fallback": str(why)[:200]}
     _rest_cache.update(t=now, data=payload)
     return payload
 

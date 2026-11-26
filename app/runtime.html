@@ -495,7 +495,15 @@ async function poll() {
     if (d && d.values) {
       VALUES = d.values;
       ERR_REASON = (d && d.errors) || {};
-      try { auditMissingTags(); } catch (e) { }
+      if (d.src && d.src !== 'rest') {
+        /* 离线兜底：这不是"变量缺失"，而是 REST 没连上，别报 N 个变量没取到值 */
+        clearErr('tags');
+        showErr('src', '当前显示离线数据：REST 未连通'
+          + (d.fallback ? '（' + d.fallback + '）' : ''));
+      } else {
+        clearErr('src');
+        try { auditMissingTags(); } catch (e) { }
+      }
     if (_FORCE_VALS) Object.assign(VALUES, _FORCE_VALS);
       renderPanels();
       applyBindings();
