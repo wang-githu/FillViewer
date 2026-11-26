@@ -704,6 +704,14 @@ def rest_read_all(tags):
         if len(tags) >= 2:
             b = rest_read_batch(tags)
             if b:
+                # 首轮批量读偶发只回一部分（一次带 100+ 个变量时尤其明显）：
+                # 对「没数据但也没报错」的项补读一次，避免前端误报缺变量。
+                retry = [t for t in tags
+                         if (b.get(t) or {}).get("v") is None and not (b.get(t) or {}).get("err")]
+                if retry and len(retry) <= 80:
+                    b2 = rest_read_batch(retry)
+                    if b2:
+                        b.update(b2)
                 vals = {}
                 anyok = False
                 for t in tags:

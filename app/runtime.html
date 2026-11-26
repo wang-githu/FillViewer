@@ -434,26 +434,37 @@ function collectTags() {
   return tags;
 }
 
-let _tagAuditDone = false;
+/* 缺变量告警：首屏有宽限期，且要连续 TAG_MISS_ROUNDS 轮都缺才报；恢复后自动消失。
+   原因：首轮批量读偶尔只回一部分（尤其一次带 100+ 个变量时），不能一缺就报红。 */
+const TAG_GRACE_MS = 6000;       // 页面启动后这段时间内不报（等 REST 首轮回齐）
+const TAG_MISS_ROUNDS = 3;       // 连续缺这么多轮才报
+const _tBoot = performance.now();
+const _missRounds = new Map();   // 变量名 -> 连续缺失轮数
+
 function auditMissingTags() {
-  if (_tagAuditDone) return;
-  _tagAuditDone = true;
-  const miss = [];
-  collectTags().forEach(t => {
+  const tags = Array.from(collectTags());
+  const missing = new Set();
+  tags.forEach(t => {
     const v = VALUES[t];
-    if (v === undefined || v === null || v === '') miss.push(t);
+    if (v === undefined || v === null || v === '') missing.add(t);
   });
-  if (!miss.length) return;
-  console.warn('[tags] 以下变量没有被取到值（可能是变量名不对、未轮询、或 WinCC 未给 REST 读授权）：', miss);
-  const reasons = miss.map(t => (ERR_REASON[t] ? t + '(' + ERR_REASON[t] + ')' : t));
+  tags.forEach(t => {
+    if (missing.has(t)) _missRounds.set(t, (_missRounds.get(t) || 0) + 1);
+    else _missRounds.delete(t);
+  });
+  const hard = tags.filter(t => missing.has(t) && (_missRounds.get(t) || 0) >= TAG_MISS_ROUNDS);
+  if (!hard.length) { clearErr('tags'); return; }          // 全部恢复：红条自动消失
+  if (performance.now() - _tBoot < TAG_GRACE_MS) return;   // 启动宽限期：静默
+  console.warn('[tags] 连续 ' + TAG_MISS_ROUNDS + ' 轮没取到值：', hard);
+  const reasons = hard.map(t => (ERR_REASON[t] ? t + '(' + ERR_REASON[t] + ')' : t));
   let hint = '';
-  if (miss.some(t => /Forbidden/i.test(ERR_REASON[t] || ''))) {
+  if (hard.some(t => /Forbidden/i.test(ERR_REASON[t] || ''))) {
     hint = ' ｜ Forbidden = WinCC 未给该变量 REST 读授权';
-  } else if (miss.some(t => /Not Found/i.test(ERR_REASON[t] || ''))) {
+  } else if (hard.some(t => /Not Found/i.test(ERR_REASON[t] || ''))) {
     hint = ' ｜ Not Found = 变量名不存在';
   }
   if (typeof showErr === 'function') {
-    showErr('tags', '有 ' + miss.length + ' 个变量没取到值：' + reasons.slice(0, 3).join('、') + hint);
+    showErr('tags', '有 ' + hard.length + ' 个变量持续没取到值：' + reasons.slice(0, 3).join('、') + hint);
   }
 }
 
