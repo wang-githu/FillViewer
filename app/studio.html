@@ -302,10 +302,13 @@
       <button class="sm" id="btnCfgSave" style="flex:1">保存到服务端配置</button>
       <button class="sm" id="btnRestProbe" style="flex:1">测试连接</button>
     </div>
+    <div class="muted" style="margin-top:6px">信任自签证书（只跳过主机名校验，证书链仍校验）</div>
     <div class="row">
-      <label style="flex:1">信任自签证书</label>
-      <input type="checkbox" id="sSkipHost" title="只跳过主机名校验，证书链仍校验">
-      <button class="sm" id="btnTrust" style="flex:1">信任当前证书</button>
+      <label>已信任</label>
+      <input type="checkbox" id="sSkipHost">
+    </div>
+    <div class="row">
+      <button class="sm" id="btnTrust" style="flex:1">信任当前证书（自动抓取并保存）</button>
     </div>
     <div class="muted" id="sProbeOut"></div>
     <div class="muted">这里保存的是<b>服务端 config.json</b> 的 REST 地址（与项目无关）；留空 = 用 server.py 默认值。</div>
