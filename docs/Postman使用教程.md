@@ -37,8 +37,8 @@
 ## 3. 导入集合与环境（两分钟）
 
 1. 左上角 `Import` → 选文件 → 把下面两个文件都拖进去：
-   - `C:\FillViewer\docs\postman\WinCC_REST.postman_collection.json`
-   - `C:\FillViewer\docs\postman\WinCC_REST.postman_environment.json`
+   - `<安装目录>\docs\postman\WinCC_REST.postman_collection.json`
+   - `<安装目录>\docs\postman\WinCC_REST.postman_environment.json`
 2. 右上角环境下拉框（默认 `No Environment`）→ 选 **`WinCC REST · 本机(YourWinCCProject1131)`**。
    > 选了环境，集合里的 `{{baseUrl}}`、`{{tag1}}` 才有值，否则请求会变成 `{{baseUrl}}/...` 直接报错。
 3. 打开集合，能看到 10 条用例（00～09）。每条后面的绿色数字就是断言条数。
@@ -92,8 +92,8 @@ WinCC REST 用的是**自签证书**，不关这个，所有请求都会报
 ### 7.2 命令行（推荐，能进 CI）
 
 ```powershell
-npx --yes newman run "C:\FillViewer\docs\postman\WinCC_REST.postman_collection.json" `
-  -e "C:\FillViewer\docs\postman\WinCC_REST.postman_environment.json" `
+npx --yes newman run "<安装目录>\docs\postman\WinCC_REST.postman_collection.json" `
+  -e "<安装目录>\docs\postman\WinCC_REST.postman_environment.json" `
   --insecure --delay-request 200
 ```
 

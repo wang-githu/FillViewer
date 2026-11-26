@@ -150,7 +150,7 @@ ctl.SetObjectPositionExt "flow01_a", x, y, z
 
 ## 3. 方案 C：网页端光点巡游（已实现）
 
-自建页面（`C:\FillViewer\index.html`）里已经加好，效果见 `preview_flow.png`：青色光点沿管道跑。
+自建页面（`<安装目录>\index.html`）里已经加好，效果见 `preview_flow.png`：青色光点沿管道跑。
 
 ### 3.1 数据从哪来
 
@@ -308,9 +308,9 @@ gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.1, 1.0, 0.85), band * 0.9);
 
 | 文件 | 说明 |
 |---|---|
-| [`WinCC_管道流水动画.vbs`](C:\FillViewer\WinCC_管道流水动画.vbs) | **方案 A 成品脚本**，直接粘进 WinCC 全局脚本动作 |
-| [`_pipe_runs.json`](C:\FillViewer\data\_pipe_runs.json) | 36 段管道的中心/长轴/长度 + 4 条链的弧长排序 |
-| [`_pipe_runs.py`](C:\FillViewer\_pipe_runs.py) | 从 GLB 自动算出上面的 JSON（管道改了重跑一次） |
-| [`preview_flow.png`](C:\FillViewer\preview_flow.png) | 方案 C 的效果截图 |
-| [`index.html`](C:\FillViewer\index.html) | 方案 C 的完整实现（`buildFlow` / `tickFlow`） |
-| [`_test_flow.vbs`](C:\FillViewer\_test_flow.vbs) | 方案 A 的 cscript 桩测试（验证调用次数） |
+| [`WinCC_管道流水动画.vbs`](<安装目录>\WinCC_管道流水动画.vbs) | **方案 A 成品脚本**，直接粘进 WinCC 全局脚本动作 |
+| [`_pipe_runs.json`](<安装目录>\data\_pipe_runs.json) | 36 段管道的中心/长轴/长度 + 4 条链的弧长排序 |
+| [`_pipe_runs.py`](<安装目录>\_pipe_runs.py) | 从 GLB 自动算出上面的 JSON（管道改了重跑一次） |
+| [`preview_flow.png`](<安装目录>\preview_flow.png) | 方案 C 的效果截图 |
+| [`index.html`](<安装目录>\index.html) | 方案 C 的完整实现（`buildFlow` / `tickFlow`） |
+| [`_test_flow.vbs`](<安装目录>\_test_flow.vbs) | 方案 A 的 cscript 桩测试（验证调用次数） |

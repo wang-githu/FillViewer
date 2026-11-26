@@ -3,6 +3,19 @@
   "restUser": "YOUR-WINCC-USER",
   "restPass": "YOUR-WINCC-PASSWORD",
   "liveTtl": 200,
+  "host": "127.0.0.1",
+  "port": 8099,
+  "security": {
+    "_说明": "见 docs/使用说明.md 第 9/10 章；改完需要重启服务",
+    "readOnly": false,
+    "requireWriteToken": true,
+    "restInsecure": false,
+    "restCaFile": "",
+    "allowOrigins": [],
+    "maxUploadMB": 256,
+    "writeRatePer10s": 10,
+    "logMaxMB": 5
+  },
   "runtime": {
     "autostartMode": "none",
     "autoopen": false,

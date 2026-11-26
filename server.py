@@ -19,6 +19,8 @@ import urllib.parse
 import base64
 import ssl
 import urllib.request
+import socket
+import re
 from concurrent.futures import ThreadPoolExecutor
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
@@ -34,10 +36,20 @@ TAGS_FILE = os.path.join(DATA_DIR, "tags.txt")
 REST_BASE = "https://YOUR-WINCC-HOST:8092/WinCCRestService"
 REST_HOST, REST_PORT = "YOUR-WINCC-HOST", 8092
 REST_USER, REST_PASS = "", ""
-_REST_AUTH = "Basic " + base64.b64encode((REST_USER + ":" + REST_PASS).encode()).decode()
-_SSL = ssl.create_default_context()
-_SSL.check_hostname = False
-_SSL.verify_mode = ssl.CERT_NONE
+# 真正的 TLS 上下文由 _ssl_ctx() 按 config.json 生成（默认开启证书校验）。
+# 保留这个变量名只为兼容旧代码里的 _SSL 引用（值为 None 时一律走 _ssl_ctx()）。
+_SSL = None
+# 安全策略默认值（都可在 config.json 里覆盖）
+SEC_DEFAULTS = {
+    "restInsecure": False,      # 自签名证书现场需显式设 true（会打印告警）
+    "restCaFile": "",           # 可选：自签名 CA 证书路径（比 restInsecure 更安全）
+    "readOnly": False,          # true = 服务端一律拒绝写值
+    "requireWriteToken": True,  # POST /api/write 必须带一次性 token
+    "allowOrigins": [],         # 额外允许的 Origin（默认只允许本机同 Host）
+    "maxUploadMB": 256,         # 单次模型上传上限
+    "writeRatePer10s": 10,      # 每客户端 10 秒内最多写几次
+    "logMaxMB": 5,              # logs/server.log 超过该大小就滚存
+}
 REST_TTL = 0.2          # 秒：REST 结果缓存默认值（可被 config.liveTtl 或 ?ttl= 覆盖）
 REST_RETRY_AFTER = 15.0  # 秒：REST 连不上后，隔这么久再试，避免每次轮询都卡住
 _rest_cache = {"t": 0, "data": None, "path": None}
@@ -104,6 +116,247 @@ def reload_cfg():
     _rest_cache["t"] = 0
     _rest_cache["data"] = None
     return _cfg
+
+
+# ---- 安全策略读取 ----
+def sec(key):
+    """取安全策略项，类型跟随 SEC_DEFAULTS。"""
+    dflt = SEC_DEFAULTS.get(key)
+    if key not in _cfg:
+        return dflt
+    v = _cfg.get(key)
+    if isinstance(dflt, bool):
+        if isinstance(v, str):
+            return v.strip().lower() in ("1", "true", "yes", "on")
+        return bool(v)
+    if isinstance(dflt, (int, float)):
+        try:
+            return type(dflt)(v)
+        except Exception:
+            return dflt
+    return v if v is not None else dflt
+
+
+# ---- REST 地址统一解析（P0-1：探测/读取/写值都从这里取 host/port）----
+def cfg_rest_addr():
+    """把 cfg_rest_base() 解析成 (scheme, host, port)。"""
+    u = urllib.parse.urlparse(cfg_rest_base())
+    scheme = (u.scheme or "https").lower()
+    host = u.hostname or REST_HOST
+    port = u.port or (443 if scheme == "https" else 80)
+    return scheme, host, int(port)
+
+
+_ssl_cache = {"key": None, "ctx": None}
+
+
+def cfg_ssl_context():
+    """按配置生成 TLS 上下文：默认校验证书（P1-1）。"""
+    ctx = ssl.create_default_context()
+    ca = (sec("restCaFile") or "").strip()
+    if ca:
+        if os.path.isfile(ca):
+            try:
+                ctx.load_verify_locations(ca)
+            except Exception as e:
+                print("[rest] 载入自定义 CA 失败（仍用系统信任链）：%s" % e, flush=True)
+        else:
+            print("[rest] restCaFile 指定的文件不存在：%s" % ca, flush=True)
+    if sec("restInsecure"):
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        if not _ssl_cache.get("warned"):
+            print("[rest][警告] 已按 restInsecure=true 关闭证书校验；"
+                  "建议改用 restCaFile 导入自签名 CA。", flush=True)
+            _ssl_cache["warned"] = True
+    return ctx
+
+
+def _ssl_ctx():
+    key = (bool(sec("restInsecure")), (sec("restCaFile") or "").strip())
+    if _ssl_cache["key"] != key or _ssl_cache["ctx"] is None:
+        _ssl_cache["key"] = key
+        _ssl_cache["ctx"] = cfg_ssl_context()
+    return _ssl_cache["ctx"]
+
+
+def rest_state():
+    """当前 REST 生效地址与熔断状态，给 UI 显示用。"""
+    scheme, host, port = cfg_rest_addr()
+    left = max(0.0, _rest_down_until - time.time())
+    return {"scheme": scheme, "host": host, "port": port,
+            "base": cfg_rest_base(),
+            "insecure": bool(sec("restInsecure")),
+            "down": left > 0, "downLeft": round(left, 1),
+            "path": _rest_cache.get("path")}
+
+
+def _tcp_connect(host, port, total=3.0):
+    """带总时限的 TCP 连接：多地址时按剩余时间分摊，避免逐个 3s 叠加。"""
+    t0 = time.time()
+    deadline = t0 + max(0.4, float(total))
+    try:
+        infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+    except Exception as e:
+        return False, e, 0
+    seen = set()
+    tries = 0
+    last = None
+    for fam, typ, proto, _cn, sa in infos:
+        key = (fam, sa)
+        if key in seen:
+            continue
+        seen.add(key)
+        left = deadline - time.time()
+        if left <= 0.05:
+            break
+        tries += 1
+        s = None
+        try:
+            s = socket.socket(fam, typ, proto)
+            s.settimeout(max(0.25, min(1.2, left)))
+            s.connect(sa)
+            return True, None, tries
+        except Exception as e:
+            last = e
+        finally:
+            if s is not None:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+    if last is None:
+        last = socket.timeout("连接超时（多地址全部耗尽时间预算）")
+    return False, last, tries
+
+
+def rest_probe(timeout=4.0):
+    """保存配置后的连通性自检：先 TCP，再打一次 REST 端点。"""
+    global _rest_down_until
+    t0 = time.time()
+    scheme, host, port = cfg_rest_addr()
+    ok_tcp, err_tcp, tries = _tcp_connect(host, port, total=min(3.0, timeout))
+    if not ok_tcp:
+        _rest_down_until = time.time() + REST_RETRY_AFTER
+        return {"ok": False, "stage": "tcp", "host": host, "port": port,
+                "err": str(err_tcp)[:160], "tries": tries,
+                "ms": int((time.time() - t0) * 1000)}
+    try:
+        code, j = _rest_call("POST", "/tagManagement/Values",
+                             body={"variableNames": []}, timeout=timeout)
+    except Exception as e:
+        return {"ok": False, "stage": "http", "host": host, "port": port,
+                "err": str(e)[:160], "ms": int((time.time() - t0) * 1000)}
+    _rest_down_until = 0.0
+    _rest_cache["t"] = 0
+    note = ""
+    if code == 0:
+        note = "TCP 通但 HTTPS 握手/请求失败（多为证书或账号）"
+    elif code in (401, 403):
+        note = "账号或授权问题（HTTP %s）" % code
+    return {"ok": code != 0, "stage": "rest", "host": host, "port": port,
+            "http": code, "err": (j or {}).get("error") if isinstance(j, dict) else None,
+            "note": note, "ms": int((time.time() - t0) * 1000)}
+
+
+# ---- 写值授权（P0-3）----
+WRITE_ALLOW_FILE = os.path.join(DATA_DIR, "write_allow.json")
+WRITE_AUDIT_FILE = os.path.join(os.path.dirname(CONFIG_FILE), "logs", "write_audit.log")
+_wtok = {}
+_wrate = {}
+
+
+def write_allow_names():
+    try:
+        d = _read_json(WRITE_ALLOW_FILE, {"names": []}) or {}
+        return set(x for x in (d.get("names") or []) if isinstance(x, str) and x.strip())
+    except Exception:
+        return set()
+
+
+def write_permitted(name):
+    """返回 (是否允许, 依据)。依据：readOnly / not-in-vartable / vartable / allowlist"""
+    if sec("readOnly"):
+        return False, "readOnly"
+    if not name:
+        return False, "missing"
+    if name in write_allow_names():
+        return True, "allowlist"
+    try:
+        vt = _read_json(VARTABLE, {}) or {}
+        for v in (vt.get("vars") or []):
+            if isinstance(v, dict) and v.get("n") == name:
+                return (bool(v.get("w")), "vartable" if v.get("w") else "vartable-readonly")
+    except Exception:
+        pass
+    return False, "not-in-vartable"
+
+
+def write_token_new(ip):
+    tok = base64.urlsafe_b64encode(os.urandom(12)).decode().rstrip("=")
+    now = time.time()
+    for k, (i, exp) in list(_wtok.items()):
+        if exp < now:
+            _wtok.pop(k, None)
+    _wtok[tok] = (ip, now + 120)
+    return tok
+
+
+def write_token_ok(tok, ip):
+    it = _wtok.pop(tok, None)
+    if not it:
+        return False
+    i, exp = it
+    return i == ip and exp >= time.time()
+
+
+def write_rate_ok(ip):
+    """每客户端 10 秒内最多 writeRatePer10s 次。"""
+    limit = int(sec("writeRatePer10s") or 10)
+    now = time.time()
+    q = [t for t in (_wrate.get(ip) or []) if now - t < 10.0]
+    if len(q) >= limit:
+        _wrate[ip] = q
+        return False
+    q.append(now)
+    _wrate[ip] = q
+    return True
+
+
+def write_audit(ip, name, value, old, result):
+    try:
+        os.makedirs(os.path.dirname(WRITE_AUDIT_FILE), exist_ok=True)
+        rec = {"t": time.strftime("%Y-%m-%d %H:%M:%S"), "ip": ip, "name": name,
+               "old": old, "new": value, "result": result}
+        with open(WRITE_AUDIT_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+# ---- 模型文件名与路径安全（P0-4）----
+GLB_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.glb$", re.IGNORECASE)
+
+
+def safe_glb_name(name):
+    n = (name or "").strip()
+    if not n or len(n) > 128:
+        raise ValueError("文件名无效")
+    if "/" in n or "\\" in n or ".." in n:
+        raise ValueError("文件名不能包含路径分隔符或 ..")
+    if not GLB_NAME_RE.match(n):
+        raise ValueError("文件名只能用字母/数字/._-，且必须以 .glb 结尾")
+    return n
+
+
+def inside(parent, child):
+    """child 的 realpath 是否仍在 parent 内。"""
+    try:
+        p = os.path.realpath(parent)
+        c = os.path.realpath(child)
+        return os.path.commonpath([p, c]) == p
+    except Exception:
+        return False
 
 # ---- 运行选项（开机自启 / 启动后自动运行 / 默认项目与模型） ----
 RT_DEFAULTS = {"autostart": False, "autostartMode": "none", "autoopen": False,
@@ -314,9 +567,10 @@ def _rest_alive():
     global _rest_down_until
     if time.time() < _rest_down_until:
         return False
-    import socket
+    # P0-1：探测用的 host/port 必须与 cfg_rest_base() 一致，否则换机后仍探旧主机
+    _scheme, _host, _port = cfg_rest_addr()
     try:
-        s = socket.create_connection((REST_HOST, REST_PORT), timeout=0.3)
+        s = socket.create_connection((_host, _port), timeout=0.3)
         s.close()
         return True
     except Exception:
@@ -490,7 +744,7 @@ def _rest_call(method, path, body=None, timeout=15):
         headers["Content-Type"] = "application/json; charset=utf-8"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=_SSL) as r:
+        with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx()) as r:
             raw = r.read().decode("utf-8", "replace")
             code = r.status
     except urllib.error.HTTPError as e:
@@ -524,7 +778,7 @@ def rest_history(body):
                "Content-Type": "application/json; charset=utf-8"}
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=40, context=_SSL) as r:
+        with urllib.request.urlopen(req, timeout=40, context=_ssl_ctx()) as r:
             raw = r.read().decode("utf-8", "replace")
             code = r.status
     except urllib.error.HTTPError as e:
@@ -1424,6 +1678,40 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # ---- 严格请求体解析（P2-4）与同源校验（P0-3）----
+    def _body_json(self, limit=8 * 1024 * 1024):
+        n = int(self.headers.get("Content-Length") or 0)
+        if n <= 0:
+            return {}
+        if n > limit:
+            raise ValueError("请求体过大")
+        raw = self.rfile.read(n)
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            raise ValueError("请求体不是合法 UTF-8")
+        try:
+            obj = json.loads(text or "{}")
+        except Exception:
+            raise ValueError("请求体不是合法 JSON")
+        if not isinstance(obj, dict):
+            raise ValueError("请求体必须是 JSON 对象")
+        return obj
+
+    def _same_origin(self):
+        o = (self.headers.get("Origin") or "").strip()
+        if not o:
+            return True
+        host = (self.headers.get("Host") or "").strip()
+        allow = {"http://" + host, "https://" + host}
+        try:
+            for x in (sec("allowOrigins") or []):
+                if isinstance(x, str) and x.strip():
+                    allow.add(x.strip().rstrip("/"))
+        except Exception:
+            pass
+        return o.rstrip("/") in allow
+
     def do_GET(self):
         if self.path.startswith("/api/runtime"):
             rt = runtime_cfg()
@@ -1441,13 +1729,34 @@ class Handler(SimpleHTTPRequestHandler):
             })
             return
         if self.path.startswith("/api/config"):
+            # P0-2：永不回显 restPass，只告诉前端"是否已配置"
+            _pw = _cfg.get("restPass") or REST_PASS or ""
             self._json({
                 "restBase": cfg_rest_base(),
                 "restUser": _cfg.get("restUser") or REST_USER,
-                "restPass": _cfg.get("restPass") or REST_PASS,
+                "hasPass": bool(_pw),
+                "passLen": len(_pw),
                 "fromFile": os.path.isfile(CONFIG_FILE),
                 "file": CONFIG_FILE,
+                "state": rest_state(),
+                "security": {"readOnly": bool(sec("readOnly")),
+                             "requireWriteToken": bool(sec("requireWriteToken")),
+                             "maxUploadMB": int(sec("maxUploadMB") or 256),
+                             "restInsecure": bool(sec("restInsecure")),
+                             "restCaFile": sec("restCaFile") or ""},
             })
+            return
+        if self.path.startswith("/api/write/token"):
+            # 一次性写值确认 token（P0-3）
+            self._json({"ok": True, "t": write_token_new(self.client_address[0])})
+            return
+        if self.path.startswith("/api/rest/probe"):
+            # 供配置台「测试连接」用：真正打一次 REST
+            try:
+                r = rest_probe()
+            except Exception as e:
+                r = {"ok": False, "stage": "exception", "err": str(e), "ms": 0}
+            self._json(r)
             return
         if self.path.startswith("/api/live"):
             try:
@@ -1605,18 +1914,34 @@ class Handler(SimpleHTTPRequestHandler):
     # ---------------- POST ----------------
     def do_POST(self):
         if self.path.startswith("/api/config"):
+            if not self._same_origin():
+                return self._json({"ok": False, "error": "跨站请求被拒绝"}, 403)
             try:
-                n = int(self.headers.get("Content-Length", 0))
-                b = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
+                b = self._body_json()
                 cur = dict(_cfg)
+                touched_rest = False
                 for k in ("restBase", "restUser", "restPass"):
                     if k in b and b[k] is not None:
                         cur[k] = str(b[k])
+                        touched_rest = True
+                for k in ("restInsecure", "restCaFile", "readOnly",
+                          "requireWriteToken", "maxUploadMB", "writeRatePer10s",
+                          "logMaxMB"):
+                    if k in b and b[k] is not None:
+                        cur[k] = b[k]
+                if isinstance(b.get("allowOrigins"), list):
+                    cur["allowOrigins"] = [str(x) for x in b["allowOrigins"]]
                 _write_json(CONFIG_FILE, cur)
                 reload_cfg()
-                self._json({"ok": True, "restBase": cfg_rest_base()})
+                check = rest_probe() if touched_rest else None
+                self._json({"ok": True, "restBase": cfg_rest_base(),
+                            "hasPass": bool(_cfg.get("restPass") or REST_PASS),
+                            "check": check, "state": rest_state()})
+            except ValueError as e:
+                self._json({"ok": False, "error": str(e)}, 400)
             except Exception as e:
-                self._json({"ok": False, "error": str(e)})
+                print("[config] 保存失败：%s" % e, flush=True)
+                self._json({"ok": False, "error": "保存失败（详见服务端日志）"}, 500)
             return
         if self.path.startswith("/api/runtime"):
             try:
@@ -1668,13 +1993,40 @@ class Handler(SimpleHTTPRequestHandler):
             })
             return
         if self.path.startswith("/api/write"):
-            n = int(self.headers.get("Content-Length", 0))
-            rec = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
+            # P0-3：同源校验 → 只读/白名单 → 一次性 token → 速率限制 → 审计
+            if not self._same_origin():
+                return self._json({"ok": False, "error": "跨站请求被拒绝"}, 403)
+            try:
+                rec = self._body_json()
+            except ValueError as e:
+                return self._json({"ok": False, "error": str(e)}, 400)
             name, val = str(rec.get("n", "")).strip(), rec.get("v")
+            ip = self.client_address[0]
             if not name:
-                self._json({"ok": False, "error": "missing name"}, 400)
-                return
-            self._json(rest_write_one(name, val))
+                return self._json({"ok": False, "error": "缺少变量名"}, 400)
+            okw, why = write_permitted(name)
+            if not okw:
+                write_audit(ip, name, val, None, "denied:" + why)
+                msg = {"readOnly": "服务端处于只读模式，已拒绝写值",
+                       "vartable-readonly": "该变量在变量表里标记为不可写",
+                       "not-in-vartable": "该变量不在变量表里，服务端拒绝写值"}.get(why, "不允许写该变量")
+                return self._json({"ok": False, "error": msg, "reason": why}, 403)
+            if sec("requireWriteToken"):
+                if not write_token_ok(str(rec.get("t", "")), ip):
+                    return self._json({"ok": False, "error": "写值确认已过期，请刷新页面重试",
+                                       "reason": "token"}, 403)
+            if not write_rate_ok(ip):
+                write_audit(ip, name, val, None, "denied:rate")
+                return self._json({"ok": False, "error": "写值过于频繁，请稍后再试"}, 429)
+            old = None
+            try:
+                old = rest_read_one(name).get("value")
+            except Exception:
+                pass
+            r = rest_write_one(name, val)
+            ok = (r.get("http") == 200 and r.get("errorcode") in (None, 0) and not r.get("err"))
+            write_audit(ip, name, val, old, ("ok" if ok else "fail:%s" % (r.get("err") or r.get("errorcode"))))
+            self._json(r)
             return
         if self.path.startswith("/api/projects"):
             n = int(self.headers.get("Content-Length", 0))
@@ -1693,12 +2045,25 @@ class Handler(SimpleHTTPRequestHandler):
                 d = proj_dir(pid)
                 if not os.path.isdir(d):
                     raise ValueError("项目不存在")
-                if not name or not name.isascii():
-                    raise ValueError("文件名必须纯 ASCII")
-                if not name.lower().endswith(".glb"):
-                    raise ValueError("只接受 .glb")
-                dst = os.path.join(d, "model", name)
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                # P0-4：严格文件名白名单 + 大小/磁盘余量
+                name = safe_glb_name(name)
+                maxb = int(sec("maxUploadMB") or 256) * 1024 * 1024
+                if n <= 0:
+                    raise ValueError("没有收到文件内容")
+                if n > maxb:
+                    raise ValueError("文件过大：%.1f MB，上限 %d MB"
+                                     % (n / 1048576.0, int(sec("maxUploadMB") or 256)))
+                mdir = os.path.join(d, "model")
+                os.makedirs(mdir, exist_ok=True)
+                dst = os.path.join(mdir, name)
+                if not inside(mdir, dst):
+                    raise ValueError("目标路径越界")
+                try:
+                    free = shutil.disk_usage(mdir).free
+                    if free < n * 2:
+                        raise ValueError("磁盘余量不足：剩余 %.1f MB" % (free / 1048576.0))
+                except OSError:
+                    pass
                 left = n
                 with open(dst, "wb") as f:
                     while left > 0:
@@ -1725,13 +2090,28 @@ class Handler(SimpleHTTPRequestHandler):
                 if not os.path.isdir(d):
                     raise ValueError("项目不存在")
                 if not os.path.isfile(src):
-                    raise ValueError("源文件不存在：" + src)
-                base = os.path.basename(src)
-                if not base.isascii():
-                    raise ValueError("模型文件名必须纯 ASCII：" + base)
-                os.makedirs(os.path.join(d, "model"), exist_ok=True)
-                dst = os.path.join(d, "model", base)
-                import shutil
+                    raise ValueError("源文件不存在")
+                # P0-4：只允许从受信模型库（models/ 或任何 projects/*/model）复制
+                base = safe_glb_name(os.path.basename(src))
+                trusted = [os.path.join(ROOT, "models")]
+                pdir = os.path.join(ROOT, "projects")
+                if os.path.isdir(pdir):
+                    for _p in os.listdir(pdir):
+                        trusted.append(os.path.join(pdir, _p, "model"))
+                if not any(inside(t, src) for t in trusted):
+                    raise ValueError("只能从模型库（models/ 或已有项目的 model/）复制模型")
+                if os.path.getsize(src) > int(sec("maxUploadMB") or 256) * 1024 * 1024:
+                    raise ValueError("模型文件超过上传上限")
+                mdir = os.path.join(d, "model")
+                os.makedirs(mdir, exist_ok=True)
+                dst = os.path.join(mdir, base)
+                if not inside(mdir, dst):
+                    raise ValueError("目标路径越界")
+                if os.path.realpath(src) == os.path.realpath(dst):
+                    # 源与目标同一个文件：直接返回成功，不重复复制
+                    self._json({"ok": True, "model": base, "size": os.path.getsize(dst),
+                                "nodes": len(glb_nodes(dst)), "note": "同一个文件，未复制"})
+                    return
                 shutil.copy2(src, dst)
                 pj = _read_json(os.path.join(d, "project.json"), {})
                 pj["model"] = base
@@ -1888,14 +2268,74 @@ class Handler(SimpleHTTPRequestHandler):
         pass
 
 
-if __name__ == "__main__":
-    host = os.environ.get("FILLVIEWER_HOST", "127.0.0.1")
-    port = int(os.environ.get("FILLVIEWER_PORT", "8099"))
+def _rotate_log(path, max_mb):
+    """P2-1：超过上限就把 server.log 滚成 .1 ... .5"""
+    try:
+        if not os.path.isfile(path):
+            return
+        if os.path.getsize(path) < max_mb * 1024 * 1024:
+            return
+        for i in range(4, 0, -1):
+            src = "%s.%d" % (path, i)
+            if os.path.isfile(src):
+                try:
+                    os.replace(src, "%s.%d" % (path, i + 1))
+                except OSError:
+                    pass
+        os.replace(path, path + ".1")
+    except Exception:
+        pass
 
-    # 日志：写到 logs\server.log，方便换机器后排查
+
+def _port_owner(port):
+    """P1-3：端口被占用时，找出占用进程信息（Windows 用 netstat/tasklist）。"""
+    try:
+        import subprocess
+        out = subprocess.run(["netstat", "-ano"], capture_output=True, text=True,
+                             timeout=8, errors="ignore").stdout
+        pid = ""
+        for line in out.splitlines():
+            if (":%d" % port) in line and "LISTENING" in line.upper():
+                parts = line.split()
+                if parts:
+                    pid = parts[-1]
+                    break
+        if not pid:
+            return ""
+        info = subprocess.run(["tasklist", "/FI", "PID eq %s" % pid],
+                              capture_output=True, text=True, timeout=8,
+                              errors="ignore").stdout
+        name = ""
+        for line in info.splitlines():
+            if pid in line:
+                name = line.split()[0]
+                break
+        return ("PID %s %s" % (pid, name)).strip()
+    except Exception:
+        return ""
+
+
+def _port_in_use(host, port):
+    """Windows 的 SO_REUSEADDR 允许重复绑定，必须主动连一下才可靠。"""
+    _h = "127.0.0.1" if host in ("0.0.0.0", "", None) else host
+    try:
+        s1 = socket.create_connection((_h, port), timeout=0.5)
+        s1.close()
+        return True
+    except Exception:
+        return False
+
+
+if __name__ == "__main__":
+    host = os.environ.get("FILLVIEWER_HOST") or (_cfg.get("host") or "127.0.0.1")
+    port = int(os.environ.get("FILLVIEWER_PORT") or _cfg.get("port") or 8099)
+
+    # 日志：写到 logs\server.log；超过 logMaxMB 自动滚存（P2-1）
     _logdir = os.path.join(ROOT, "logs")
     os.makedirs(_logdir, exist_ok=True)
-    _logf = open(os.path.join(_logdir, "server.log"), "a", encoding="utf-8", buffering=1)
+    _logpath = os.path.join(_logdir, "server.log")
+    _rotate_log(_logpath, int(sec("logMaxMB") or 5))
+    _logf = open(_logpath, "a", encoding="utf-8", buffering=1)
     _logf.write("\n===== start %s  python %s =====\n"
                 % (time.strftime("%Y-%m-%d %H:%M:%S"), sys.version.split()[0]))
 
@@ -1920,12 +2360,27 @@ if __name__ == "__main__":
 
     print("FillViewer ready:  http://%s:%d/index.html" % (host, port))
     print("静态根目录: %s" % ROOT)
-    print("REST: %s" % cfg_rest_base())
+    print("REST 生效地址: %s  （证书校验：%s）"
+          % (cfg_rest_base(), "关闭（restInsecure=true）" if sec("restInsecure") else "开启"))
+    print("写值策略: %s；一次性 token: %s；上传上限: %d MB"
+          % ("只读" if sec("readOnly") else "白名单可写",
+             "开" if sec("requireWriteToken") else "关",
+             int(sec("maxUploadMB") or 256)))
+    if _port_in_use(host, port):
+        print("[FATAL] 端口 %d 已被占用（可能 FillViewer 已经在跑）" % port)
+        print("[FATAL] 占用进程：%s" % (_port_owner(port) or "未识别"))
+        print("[FATAL] 结束该进程，或设环境变量 FILLVIEWER_PORT 换一个端口")
+        raise SystemExit(2)
     try:
         ThreadingHTTPServer((host, port), Handler).serve_forever()
     except OSError as e:
+        owner = _port_owner(port)
         print("[FATAL] 端口 %d 被占用或无法绑定：%s" % (port, e))
-        raise
+        if owner:
+            print("[FATAL] 占用进程：%s（结束它或改用 FILLVIEWER_PORT 换端口）" % owner)
+        else:
+            print("[FATAL] 未找到占用进程；可设环境变量 FILLVIEWER_PORT 换端口")
+        raise SystemExit(2)
 
 
 

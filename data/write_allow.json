@@ -1,0 +1,4 @@
+{
+  "_说明": "写值白名单：names 里列出的变量才允许 POST /api/write（还必须在 data/vartable.json 里 w=1）。留空表示不额外限制。改完需要重启服务。",
+  "names": []
+}

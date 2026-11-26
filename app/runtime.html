@@ -1419,11 +1419,20 @@ function deviceNameOf(obj) {
 }
 
 async function writeOne(tag, val) {
+  // P0-3：服务端要求一次性确认 token（防跨站/防误触发）
+  let tok = '';
+  try {
+    const tj = await fetch('/api/write/token', { cache: 'no-store' }).then(r => r.json());
+    if (tj && tj.t) tok = tj.t;
+  } catch (e) { }
   const r = await fetch('/api/write', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ n: tag, v: String(val) }),
+    body: JSON.stringify({ n: tag, v: String(val), t: tok }),
   });
-  return await r.json();
+  const j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }));
+  if (r.status === 403) j.error = j.error || j.why || '被拒绝';
+  if (r.status === 429) j.error = j.error || '写入过于频繁（限流）';
+  return j;
 }
 
 async function pushClick(name) {
@@ -1523,11 +1532,10 @@ async function tryWrite(tag, whitelisted) {
   const val = prompt(`写入 ${tag}\n当前值：${cur}\n请输入新值：`, '');
   if (val === null || val === '') return;
   if (!confirm(`确认写入？\n${tag} = ${val}`)) return;
-  const r = await fetch('/api/write', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ n: tag, v: val })
-  }).then(x => x.json());
-  if (r.errorcode && r.errorcode !== 0) alert('写入失败：errorcode ' + r.errorcode);
+  const r = await writeOne(tag, val);
+  if (r.error || (r.errorcode && r.errorcode !== 0)) {
+    alert('写入失败：' + (r.error || ('errorcode ' + r.errorcode)));
+  }
 }
 
 boot();

@@ -604,6 +604,6 @@ curl -k -u $U -X POST -H "Content-Type: application/json; charset=utf-8" \
 ## 附：与本项目（FillViewer）的对接关系
 
 - 浏览器页面在 `http://127.0.0.1:8099`，**不直接**访问 8092（跨源 + 证书问题）。
-- 由 `C:\FillViewer_发布\server.py` 统一代理：`/api/live`（批量读 + 200 ms 缓存）、`/api/read`（单/多值）、`/api/vt`（变量表）、`/api/history`（历史）。
-- WinCC 地址写在 `C:\FillViewer_发布\config.json` 的 `restBase`（**必须主机名**）。
+- 由 `<安装目录>_发布\server.py` 统一代理：`/api/live`（批量读 + 200 ms 缓存）、`/api/read`（单/多值）、`/api/vt`（变量表）、`/api/history`（历史）。
+- WinCC 地址写在 `<安装目录>_发布\config.json` 的 `restBase`（**必须主机名**）。
 - 只读/只写权限仍由 WinCC 侧决定：页面写入前还会再校验"该变量是否勾了可写白名单"。

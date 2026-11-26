@@ -1,11 +1,20 @@
-﻿REM ============================================================
-REM  说明：本文件为示例，链数据/变量名请按你自己的项目重新生成。
-REM  用法见 docs/WinCC_管道流水动画_方案与教程.md
-REM ============================================================
+﻿REM ============================================================
+
+REM  说明：本文件为示例，链数据/变量名请按你自己的项目重新生成。
+
+REM  用法见 docs/WinCC_管道流水动画_方案与教程.md
+
+REM ============================================================
+
 Option Explicit
+
+' 安装目录：改成你实际解压/部署的位置（末尾不要带反斜杠）
+' 改这一行即可，下面的 tags/data.json/调试日志路径都由它拼出来
+Const ROOT = "<安装目录>"
+
 '==============================================================
 '  WinCC 全局脚本动作：把实时变量写进 FillViewer 的 data.json
-'  变量清单不用再手工维护 —— 直接读 C:\FillViewer\data\tags.txt
+'  变量清单不用再手工维护 —— 直接读 <安装目录>\data\tags.txt
 '  （网页上每给一块看板填了“变量”，就会自动把清单写进 tags.txt）
 '  触发器：周期触发，500 毫秒
 '--------------------------------------------------------------
@@ -14,9 +23,9 @@ Option Explicit
 '==============================================================
 Function action
     Dim TAGS_PATH, OUT_PATH, ERR_PATH
-    TAGS_PATH = "C:\FillViewer\data\tags.txt"
-    OUT_PATH  = "C:\FillViewer\data\data.json"
-    ERR_PATH  = "C:\FillViewer\data\_wincc_debug.txt"
+    TAGS_PATH = ROOT & "\data\tags.txt"
+    OUT_PATH  = ROOT & "\data\data.json"
+    ERR_PATH  = ROOT & "\data\_wincc_debug.txt"
 
     Dim fso, tf, f, s, line, tags, nTag, i, j
     Dim v, item, tagName, ch, codeN, esc, dbg, bad, errN, errD

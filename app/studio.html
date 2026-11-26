@@ -295,9 +295,15 @@
     <div class="muted" id="projPathLine">读取中…</div>
     <div class="row"><button class="sm" id="btnProjPath" style="flex:1">刷新路径</button></div>
 
-    <h3>REST 连接</h3>
+    <h3>REST 连接（服务端）</h3>
+    <div class="muted" id="sStateLine">读取中…</div>
     <div class="row"><label>地址</label><input id="sRest" placeholder="https://host:8092/WinCCRestService"></div>
-    <div class="muted">留空则用全局配置（server.py 里的 REST_BASE）</div>
+    <div class="row">
+      <button class="sm" id="btnCfgSave" style="flex:1">保存到服务端配置</button>
+      <button class="sm" id="btnRestProbe" style="flex:1">测试连接</button>
+    </div>
+    <div class="muted" id="sProbeOut"></div>
+    <div class="muted">这里保存的是<b>服务端 config.json</b> 的 REST 地址（与项目无关）；留空 = 用 server.py 默认值。</div>
     <h3>引擎光/画质</h3>
     <div class="row"><label>画质</label>
       <select id="sQ"><option value="low">低</option><option value="mid">中</option><option value="high">高</option></select>
@@ -882,7 +888,8 @@ async function loadProject() {
   PIPE_TPLS = PROJECT.pipeTpls || [];
   MULTI.clear();
   const pj = PROJECT.project || {};
-  $('sRest').value = (pj.rest && pj.rest.base) || '';
+  // P0-1：REST 地址只认服务端 config.json，不再用项目级 rest.base（消除双轨）
+  if (typeof svcCfg === 'function') { try { svcCfg(); } catch (e) { } }
   $('sQ').value = pj.quality || 'high';
   $('sBg').value = pj.background || 'light';
   if ($('sPoll')) $('sPoll').value = (pj.poll ?? 300);
@@ -2856,6 +2863,64 @@ function healthDel(it, btn) {
   }
 }
 
+/* ================= 服务端连接与安全状态（审核 P0-1 / P0-2） ================= */
+async function svcCfg() {
+  const box = document.getElementById('sStateLine');
+  try {
+    const j = await fetch('/api/config?_=' + Date.now(), { cache: 'no-store' }).then(r => r.json());
+    const st = j.state || {}, se = j.security || {};
+    const eff = st.base || j.restBase || '';
+    const el = document.getElementById('sRest');
+    if (el && !el.value) el.value = eff;
+    const bits = [];
+    bits.push(st.down ? ('服务端已熔断（剩 ' + (st.downLeft || 0) + ' s）') : '服务端正常');
+    bits.push('证书校验：' + (st.insecure ? '已关闭（不推荐）' : '开启'));
+    bits.push('写值：' + (se.readOnly ? '全部只读' : (se.requireWriteToken ? '需一次性 token' : '允许直写')));
+    bits.push('上传上限 ' + (se.maxUploadMB || 0) + ' MB');
+    if (box) box.innerHTML = '生效地址：<b>' + (eff || '（未配置）') + '</b><br>' + bits.join(' · ');
+  } catch (e) {
+    if (box) box.textContent = '读取服务端配置失败：' + e.message;
+  }
+}
+
+async function svcProbe() {
+  const out = document.getElementById('sProbeOut');
+  if (out) out.textContent = '探测中…';
+  try {
+    const j = await fetch('/api/rest/probe?_=' + Date.now(), { cache: 'no-store' }).then(r => r.json());
+    if (out) out.textContent = j.ok
+      ? ('连接成功：' + (j.http || 200) + ' · ' + j.ms + ' ms' + (j.stage ? ' · ' + j.stage : ''))
+      : ('连接失败：' + (j.stage || '') + ' ' + (j.err || '') + '（' + j.ms + ' ms）');
+    svcCfg();
+  } catch (e) { if (out) out.textContent = '探测失败：' + e.message; }
+}
+
+async function svcSave() {
+  const el = document.getElementById('sRest');
+  const out = document.getElementById('sProbeOut');
+  const v = ((el && el.value) || '').trim();
+  if (out) out.textContent = '保存中…';
+  try {
+    const j = await fetch('/api/config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ restBase: v }),
+    }).then(r => r.json());
+    if (!j.ok) { if (out) out.textContent = '保存失败：' + (j.error || ''); return; }
+    const c = j.check || {};
+    if (out) out.textContent = c.ok
+      ? ('已保存，连接正常（' + c.ms + ' ms）')
+      : ('已保存，但连接不通：' + (c.stage || '') + ' ' + (c.err || ''));
+    await svcCfg();
+  } catch (e) { if (out) out.textContent = '保存失败：' + e.message; }
+}
+
+(function () {
+  const b1 = document.getElementById('btnCfgSave');
+  const b2 = document.getElementById('btnRestProbe');
+  if (b1) b1.addEventListener('click', svcSave);
+  if (b2) b2.addEventListener('click', svcProbe);
+  svcCfg();
+})();
 </script>
 </body>
 </html>
