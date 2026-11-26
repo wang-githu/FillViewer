@@ -43,6 +43,7 @@ _SSL = None
 SEC_DEFAULTS = {
     "restInsecure": False,      # 自签名证书现场需显式设 true（会打印告警）
     "restCaFile": "",           # 可选：自签名 CA 证书路径（比 restInsecure 更安全）
+    "restSkipHostname": False,  # true = 校验证书链但跳过主机名（自签证书 CN/SAN 与访问名不一致时用）
     "readOnly": False,          # true = 服务端一律拒绝写值
     "requireWriteToken": True,  # POST /api/write 必须带一次性 token
     "allowOrigins": [],         # 额外允许的 Origin（默认只允许本机同 Host）
@@ -162,6 +163,13 @@ def cfg_ssl_context():
                 print("[rest] 载入自定义 CA 失败（仍用系统信任链）：%s" % e, flush=True)
         else:
             print("[rest] restCaFile 指定的文件不存在：%s" % ca, flush=True)
+    if sec("restSkipHostname") and not sec("restInsecure"):
+        # 只跳过"证书名是否匹配访问主机"，证书链仍然校验（比 restInsecure 安全）
+        ctx.check_hostname = False
+        if not _ssl_cache.get("warnedSkip"):
+            print("[rest][提示] 已按 restSkipHostname=true 跳过主机名校验（证书链仍校验）。",
+                  flush=True)
+            _ssl_cache["warnedSkip"] = True
     if sec("restInsecure"):
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -173,7 +181,8 @@ def cfg_ssl_context():
 
 
 def _ssl_ctx():
-    key = (bool(sec("restInsecure")), (sec("restCaFile") or "").strip())
+    key = (bool(sec("restInsecure")), bool(sec("restSkipHostname")),
+           (sec("restCaFile") or "").strip())
     if _ssl_cache["key"] != key or _ssl_cache["ctx"] is None:
         _ssl_cache["key"] = key
         _ssl_cache["ctx"] = cfg_ssl_context()
@@ -230,6 +239,49 @@ def _tcp_connect(host, port, total=3.0):
     return False, last, tries
 
 
+def _cert_info(pem_path):
+    """解析 PEM 证书的关键字段（给界面和日志看）。"""
+    try:
+        d = ssl._ssl._test_decode_cert(pem_path)
+        sub = "; ".join("%s=%s" % (k, v) for tup in (d.get("subject") or ()) for k, v in tup)
+        iss = "; ".join("%s=%s" % (k, v) for tup in (d.get("issuer") or ()) for k, v in tup)
+        san = ", ".join("%s:%s" % (t, v) for t, v in (d.get("subjectAltName") or ()))
+        return {"subject": sub, "issuer": iss,
+                "notBefore": d.get("notBefore") or "", "notAfter": d.get("notAfter") or "",
+                "san": san}
+    except Exception as e:
+        return {"err": str(e)}
+
+
+def trust_rest_cert():
+    """抓取当前 REST 服务端证书 → 存 certs/wincc-rest.pem → 让配置信任它（跳过主机名）。"""
+    scheme, host, port = cfg_rest_addr()
+    if scheme != "https":
+        raise ValueError("当前 REST 地址不是 https，无需信任证书")
+    ctx = ssl._create_unverified_context()
+    with socket.create_connection((host, port), timeout=5) as s:
+        with ctx.wrap_socket(s, server_hostname=host) as ss:
+            der = ss.getpeercert(binary_form=True)
+    if not der:
+        raise ValueError("没有从服务端取到证书")
+    pem = ssl.DER_cert_to_PEM_cert(der)
+    d = os.path.join(ROOT, "certs")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, "wincc-rest.pem")
+    with open(path, "w", encoding="ascii", newline="\n") as f:
+        f.write(pem)
+    _cfg["restCaFile"] = path
+    _cfg["restSkipHostname"] = True
+    info = _cert_info(path)
+    info["path"] = path
+    info["bytes"] = len(pem)
+    info["host"] = host
+    info["port"] = port
+    print("[rest] 已信任 %s:%d 的证书（%d B），证书链校验开启、主机名校验跳过。"
+          % (host, port, len(pem)), flush=True)
+    return info
+
+
 def rest_probe(timeout=4.0):
     """保存配置后的连通性自检：先 TCP，再打一次 REST 端点。"""
     global _rest_down_until
@@ -242,11 +294,27 @@ def rest_probe(timeout=4.0):
                 "err": str(err_tcp)[:160], "tries": tries,
                 "ms": int((time.time() - t0) * 1000)}
     try:
-        code, j = _rest_call("POST", "/tagManagement/Values",
-                             body={"variableNames": []}, timeout=timeout)
+        # 先用 REST 根路径 GET（返回服务描述 JSON，200），对 WinCC 最无害；
+        # 个别版本根路径不可用，再退回"空变量列表 POST"探活。
+        code, j = _rest_call("GET", "", timeout=timeout)
+        if code != 200:
+            code, j = _rest_call("POST", "/tagManagement/Values",
+                                 body={"variableNames": []}, timeout=timeout)
     except Exception as e:
-        return {"ok": False, "stage": "http", "host": host, "port": port,
-                "err": str(e)[:160], "ms": int((time.time() - t0) * 1000)}
+        msg = str(e)
+        low = msg.lower()
+        is_tls = ("certificate_verify_failed" in low or "hostname mismatch" in low
+                  or "certificate verify failed" in low or "ssl:" in low)
+        _rest_down_until = time.time() + REST_RETRY_AFTER
+        out = {"ok": False, "stage": "tls" if is_tls else "http",
+               "host": host, "port": port, "err": msg[:200],
+               "ms": int((time.time() - t0) * 1000)}
+        if is_tls:
+            out["canTrust"] = True
+            out["hint"] = ("WinCC 的 REST 用自签证书，证书名（CN/SAN）通常不含你访问用的主机名，"
+                           "所以会报 Hostname mismatch。点「信任当前证书」：程序会把该证书存到 "
+                           "certs/ 并只跳过主机名校验（证书链仍校验）。")
+        return out
     _rest_down_until = 0.0
     _rest_cache["t"] = 0
     note = ""
@@ -1743,6 +1811,7 @@ class Handler(SimpleHTTPRequestHandler):
                              "requireWriteToken": bool(sec("requireWriteToken")),
                              "maxUploadMB": int(sec("maxUploadMB") or 256),
                              "restInsecure": bool(sec("restInsecure")),
+                             "restSkipHostname": bool(sec("restSkipHostname")),
                              "restCaFile": sec("restCaFile") or ""},
             })
             return
@@ -1924,9 +1993,9 @@ class Handler(SimpleHTTPRequestHandler):
                     if k in b and b[k] is not None:
                         cur[k] = str(b[k])
                         touched_rest = True
-                for k in ("restInsecure", "restCaFile", "readOnly",
-                          "requireWriteToken", "maxUploadMB", "writeRatePer10s",
-                          "logMaxMB"):
+                for k in ("restInsecure", "restSkipHostname", "restCaFile",
+                          "readOnly", "requireWriteToken", "maxUploadMB",
+                          "writeRatePer10s", "logMaxMB"):
                     if k in b and b[k] is not None:
                         cur[k] = b[k]
                 if isinstance(b.get("allowOrigins"), list):
@@ -1942,6 +2011,22 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as e:
                 print("[config] 保存失败：%s" % e, flush=True)
                 self._json({"ok": False, "error": "保存失败（详见服务端日志）"}, 500)
+            return
+        if self.path.startswith("/api/rest/trust"):
+            # 一键信任当前 REST 服务端的自签证书（校验证书链、跳过主机名）
+            if not self._same_origin():
+                return self._json({"ok": False, "error": "跨站请求被拒绝"}, 403)
+            try:
+                info = trust_rest_cert()
+                _write_json(CONFIG_FILE, dict(_cfg))
+                reload_cfg()
+                self._json({"ok": True, "cert": info, "check": rest_probe(),
+                            "security": {"restCaFile": sec("restCaFile") or "",
+                                         "restSkipHostname": bool(sec("restSkipHostname")),
+                                         "restInsecure": bool(sec("restInsecure"))}})
+            except Exception as e:
+                print("[rest] 信任证书失败：%s" % e, flush=True)
+                self._json({"ok": False, "error": "抓取证书失败（详见服务端日志）"}, 500)
             return
         if self.path.startswith("/api/runtime"):
             try:

@@ -302,6 +302,11 @@
       <button class="sm" id="btnCfgSave" style="flex:1">保存到服务端配置</button>
       <button class="sm" id="btnRestProbe" style="flex:1">测试连接</button>
     </div>
+    <div class="row">
+      <label style="flex:1">信任自签证书</label>
+      <input type="checkbox" id="sSkipHost" title="只跳过主机名校验，证书链仍校验">
+      <button class="sm" id="btnTrust" style="flex:1">信任当前证书</button>
+    </div>
     <div class="muted" id="sProbeOut"></div>
     <div class="muted">这里保存的是<b>服务端 config.json</b> 的 REST 地址（与项目无关）；留空 = 用 server.py 默认值。</div>
     <h3>引擎光/画质</h3>
@@ -2874,7 +2879,10 @@ async function svcCfg() {
     if (el && !el.value) el.value = eff;
     const bits = [];
     bits.push(st.down ? ('服务端已熔断（剩 ' + (st.downLeft || 0) + ' s）') : '服务端正常');
-    bits.push('证书校验：' + (st.insecure ? '已关闭（不推荐）' : '开启'));
+    bits.push('证书校验：' + (st.insecure ? '已关闭（不推荐）'
+      : (se.restSkipHostname ? '开启（跳过主机名）' : '开启')));
+    const cb = document.getElementById('sSkipHost');
+    if (cb) cb.checked = !!se.restSkipHostname;
     bits.push('写值：' + (se.readOnly ? '全部只读' : (se.requireWriteToken ? '需一次性 token' : '允许直写')));
     bits.push('上传上限 ' + (se.maxUploadMB || 0) + ' MB');
     if (box) box.innerHTML = '生效地址：<b>' + (eff || '（未配置）') + '</b><br>' + bits.join(' · ');
@@ -2890,7 +2898,8 @@ async function svcProbe() {
     const j = await fetch('/api/rest/probe?_=' + Date.now(), { cache: 'no-store' }).then(r => r.json());
     if (out) out.textContent = j.ok
       ? ('连接成功：' + (j.http || 200) + ' · ' + j.ms + ' ms' + (j.stage ? ' · ' + j.stage : ''))
-      : ('连接失败：' + (j.stage || '') + ' ' + (j.err || '') + '（' + j.ms + ' ms）');
+      : ('连接失败：' + (j.stage || '') + ' ' + (j.err || '') + '（' + j.ms + ' ms）'
+         + (j.hint ? ('\n提示：' + j.hint) : ''));
     svcCfg();
   } catch (e) { if (out) out.textContent = '探测失败：' + e.message; }
 }
@@ -2903,7 +2912,10 @@ async function svcSave() {
   try {
     const j = await fetch('/api/config', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ restBase: v }),
+      body: JSON.stringify({
+        restBase: v,
+        restSkipHostname: !!(document.getElementById('sSkipHost') || {}).checked,
+      }),
     }).then(r => r.json());
     if (!j.ok) { if (out) out.textContent = '保存失败：' + (j.error || ''); return; }
     const c = j.check || {};
@@ -2914,11 +2926,30 @@ async function svcSave() {
   } catch (e) { if (out) out.textContent = '保存失败：' + e.message; }
 }
 
+async function svcTrust() {
+  const out = document.getElementById('sProbeOut');
+  if (out) out.textContent = '正在读取服务端证书…';
+  try {
+    const j = await fetch('/api/rest/trust', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    }).then(r => r.json());
+    if (!j.ok) { if (out) out.textContent = '信任失败：' + (j.error || ''); return; }
+    const c = j.check || {}, ci = j.cert || {};
+    const head = '已信任证书 ' + (ci.subject || '') + '（' + (ci.bytes || 0) + ' B）';
+    const tail = c.ok ? ('，连接正常（' + c.ms + ' ms）')
+      : ('，但仍连不通：' + (c.stage || '') + ' ' + (c.err || ''));
+    if (out) out.textContent = head + tail;
+    await svcCfg();
+  } catch (e) { if (out) out.textContent = '信任失败：' + e.message; }
+}
+
 (function () {
   const b1 = document.getElementById('btnCfgSave');
   const b2 = document.getElementById('btnRestProbe');
+  const b3 = document.getElementById('btnTrust');
   if (b1) b1.addEventListener('click', svcSave);
   if (b2) b2.addEventListener('click', svcProbe);
+  if (b3) b3.addEventListener('click', svcTrust);
   svcCfg();
 })();
 </script>
