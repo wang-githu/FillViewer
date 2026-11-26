@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon/logo-wide.png" alt="FillViewer" width="640">
+</p>
+
 # FillViewer · WinCC 3D 组态替代方案
 
 把 **WinCC / PLC 的实时数据** 映射到一个 **浏览器里的 3D 场景**，用网页做工业 HMI 画面：
@@ -8,6 +12,8 @@
 ![运行画面](docs/img/runtime.png)
 
 ![配置台](docs/img/studio.png)
+
+![首页](docs/img/home.png)
 
 ## 为什么需要它
 

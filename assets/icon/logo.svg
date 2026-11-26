@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="FillViewer">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b2a3a"/>
+      <stop offset="0.55" stop-color="#101a24"/>
+      <stop offset="1" stop-color="#070c11"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="0.26" cy="0.14" r="0.85">
+      <stop offset="0" stop-color="#4aa8ff" stop-opacity="0.28"/>
+      <stop offset="0.55" stop-color="#2f81f7" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#2f81f7" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="inner" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a2b3c"/>
+      <stop offset="1" stop-color="#0a1219"/>
+    </linearGradient>
+    <linearGradient id="liquid" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8ae4ff"/>
+      <stop offset="0.45" stop-color="#3d97ff"/>
+      <stop offset="1" stop-color="#1c5fd0"/>
+    </linearGradient>
+    <clipPath id="body">
+      <rect x="166" y="150" width="180" height="248" rx="34"/>
+    </clipPath>
+  </defs>
+
+  <rect x="14" y="14" width="484" height="484" rx="112" fill="url(#bg)"/>
+  <rect x="14" y="14" width="484" height="484" rx="112" fill="url(#sheen)"/>
+  <rect x="16.5" y="16.5" width="479" height="479" rx="109.5" fill="none"
+        stroke="#2b3d52" stroke-opacity="0.85" stroke-width="3"/>
+
+  <!-- 罐体 -->
+  <g>
+    <rect x="166" y="150" width="180" height="248" rx="34" fill="url(#inner)"/>
+    <g clip-path="url(#body)">
+      <path d="M166 262 q22.5 -15 45 0 t45 0 t45 0 t45 0 V398 H166 Z" fill="url(#liquid)"/>
+      <path d="M166 262 q22.5 -15 45 0 t45 0 t45 0 t45 0" fill="none"
+            stroke="#c6f4ff" stroke-opacity="0.92" stroke-width="5"/>
+    </g>
+    <rect x="166" y="150" width="180" height="248" rx="34" fill="none"
+          stroke="#dbe8f6" stroke-width="19"/>
+    <!-- 顶口 -->
+    <ellipse cx="256" cy="150" rx="82" ry="23" fill="#080f16"/>
+    <ellipse cx="256" cy="150" rx="82" ry="23" fill="none" stroke="#dbe8f6" stroke-width="19"/>
+  </g>
+
+  <!-- 流动粒子 -->
+  <circle cx="366" cy="222" r="16" fill="#8ae4ff"/>
+  <circle cx="366" cy="222" r="16" fill="none" stroke="#8ae4ff" stroke-opacity="0.30" stroke-width="11"/>
+  <circle cx="400" cy="292" r="9" fill="#3d97ff"/>
+</svg>
