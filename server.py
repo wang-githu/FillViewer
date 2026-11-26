@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 FillViewer 本地服务
-- 静态文件：C:\\FillViewer 下所有文件
+- 静态文件：本文件所在目录下的所有文件
 - GET  /api/data   读 data/data.json（WinCC 定时写出的数据）
 - POST /api/click  接收页面点击，追加到 data/clicks.json（WinCC 定时读取）
 默认只监听 127.0.0.1:8099（可用 FILLVIEWER_HOST/PORT 覆盖），不对外暴露。
